@@ -1,0 +1,22 @@
+# Local Claude Code state (machine-specific permissions)
+.claude/settings.local.json
+
+# OS cruft
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Python (local static server)
+__pycache__/
+*.pyc
+
+# Business ledger snapshots - real supplier/customer names, sales,
+# expenses, capital and partner distributions. Kept local, never committed.
+plastic_data_*.json
