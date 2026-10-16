@@ -143,7 +143,11 @@ td{padding:12px 13px;color:var(--ink);white-space:nowrap;font-variant-numeric:ta
 .del-btn{background:none;border:none;color:var(--neg);cursor:pointer;font-size:14px;padding:3px 7px;border-radius:6px;transition:background .14s var(--ease)}
 .del-btn:hover{background:var(--neg-soft)}
 /* ── Table toolbar: search · sort · pagination ── */
-.tbl-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.tbl-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.tbl-select,.tbl-date{background:var(--surface-2);border:1px solid var(--border-strong);border-radius:20px;padding:7px 12px;color:var(--ink);font-size:12.5px;font-family:inherit;outline:none;transition:border-color .16s var(--ease),box-shadow .16s var(--ease)}
+.tbl-select:focus,.tbl-date:focus{border-color:var(--accent);box-shadow:var(--ring);background:var(--surface)}
+.tbl-range{display:inline-flex;align-items:center;gap:6px}
+.tbl-range-lbl{font-size:11.5px;color:var(--faint);font-weight:600}
 .tbl-search{flex:1;max-width:360px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:20px;padding:9px 16px;color:var(--ink);font-size:13px;font-family:inherit;outline:none;transition:border-color .16s var(--ease),box-shadow .16s var(--ease),background .16s var(--ease)}
 .tbl-search::placeholder{color:var(--faint)}
 .tbl-search:focus{border-color:var(--accent);box-shadow:var(--ring);background:var(--surface)}
@@ -580,6 +584,7 @@ let DB = {
   capital:0,
   traderAdvances:[],
   workerLiquidity:[],
+  partnerFunding:[],   // قرض سيولة مؤقت من شريك: {date, partnerId, kind:'in'|'out', amount, note}
   closings:[],
   collections:[],
   supplierPayments:[],
@@ -756,6 +761,7 @@ function buildPayload() {
     capital:        DB.capital,
     traderAdvances: DB.traderAdvances,
     workerLiquidity:DB.workerLiquidity,
+    partnerFunding: DB.partnerFunding,
     closings:       DB.closings,
     collections:    DB.collections,
     supplierPayments: DB.supplierPayments,
@@ -812,7 +818,7 @@ async function exportData() {
 // Records already holding valid objects & numbers are unchanged, so existing saved files load identically.
 function _sanitizeData(d){
   const RECORD_ARRAYS = ['suppliers','customers','purchases','sales','expenses','traderAdvances',
-                         'workerLiquidity','closings','collections','supplierPayments','partners','distributions'];
+                         'workerLiquidity','partnerFunding','closings','collections','supplierPayments','partners','distributions'];
   RECORD_ARRAYS.forEach(k=>{
     d[k] = Array.isArray(d[k]) ? d[k].filter(r => r && typeof r === 'object') : [];
   });
@@ -836,6 +842,7 @@ function _sanitizeData(d){
   d.supplierPayments.forEach(r=> r.amount=num(r.amount));
   d.traderAdvances.forEach(r=> r.amount=num(r.amount));
   d.workerLiquidity.forEach(r=> r.amount=num(r.amount));
+  d.partnerFunding.forEach(r=>{ r.amount=num(r.amount); r.kind = r.kind==='out' ? 'out' : 'in'; });
   d.partners.forEach(r=> r.sharePct=num(r.sharePct));
   d.distributions.forEach(r=>{ r.amount=num(r.amount);
     r.breakdown = Array.isArray(r.breakdown)
@@ -861,12 +868,13 @@ function loadJsonText(text, source, opts={}) {
     DB.capital         = d.capital         || 0;
     DB.traderAdvances  = d.traderAdvances  || [];
     DB.workerLiquidity = d.workerLiquidity || [];
+    DB.partnerFunding  = d.partnerFunding  || [];
     DB.closings        = d.closings        || [];
     DB.collections     = d.collections     || [];
     DB.supplierPayments= d.supplierPayments|| [];
     DB.partners        = d.partners        || [];
     DB.distributions   = d.distributions   || [];
-    const allIds = [...DB.suppliers,...DB.customers,...DB.purchases,...DB.sales,...DB.expenses,...DB.traderAdvances,...DB.workerLiquidity,...DB.collections,...DB.supplierPayments,...DB.partners,...DB.distributions].map(x=>(x&&x.id)||0);
+    const allIds = [...DB.suppliers,...DB.customers,...DB.purchases,...DB.sales,...DB.expenses,...DB.traderAdvances,...DB.workerLiquidity,...DB.partnerFunding,...DB.collections,...DB.supplierPayments,...DB.partners,...DB.distributions].map(x=>(x&&x.id)||0);
     if (allIds.length) _uid = Math.max(_uid, ...allIds) + 1;
     DB.view = 'dashboard';
     render();
@@ -944,14 +952,14 @@ function closeConfirm() {
   _confirmReturnFocus=null;
 }
 const DATA_KEYS = ['suppliers','customers','purchases','sales','expenses','materials','capital',
-                   'traderAdvances','workerLiquidity','closings','collections','supplierPayments',
+                   'traderAdvances','workerLiquidity','partnerFunding','closings','collections','supplierPayments',
                    'partners','distributions'];
 function clearAllData() {
   const snap = {};                                  // full snapshot so even "مسح الكل" is undoable
   DATA_KEYS.forEach(k => snap[k] = DB[k]);
   DB.suppliers=[]; DB.customers=[]; DB.purchases=[]; DB.sales=[]; DB.expenses=[];
   DB.materials=[...DEFAULT_MATS];
-  DB.capital=0; DB.traderAdvances=[]; DB.workerLiquidity=[]; DB.closings=[];
+  DB.capital=0; DB.traderAdvances=[]; DB.workerLiquidity=[]; DB.partnerFunding=[]; DB.closings=[];
   DB.collections=[]; DB.supplierPayments=[];
   DB.partners=[]; DB.distributions=[];
   DB.view='dashboard';
@@ -1073,12 +1081,24 @@ function computedCash(db=DB){
   const cashOutExp  = db.expenses.reduce((s,r)=>s+num(r.amount),0)+totalTxExp;
   const traderOut   = db.traderAdvances.filter(a=>!a.settled).reduce((s,a)=>s+num(a.amount),0);
   const workerOut   = db.workerLiquidity.filter(w=>!w.returned&&!w.partnerId).reduce((s,w)=>s+num(w.amount),0);
-  const partnerDrawsOut = partnerDrawsTotal(db);
-  const cashBalance = db.capital + cashIn + collIn - cashOutBuy - suppPaid - cashOutExp - traderOut - workerOut - partnerDrawsOut - totalDistributed;
+  // Partner draws & distributions — cash follows what physically left the till:
+  //   • every unreturned partner draw is cash out on its own date
+  //   • a distribution pays out only its NET (gross − draws it absorbed); the absorbed part left earlier
+  // Identical to the old "outstanding draws + gross distributed" when draws ≥ absorbed, but stays right
+  // if an absorbed draw is later edited/deleted (the old form silently floored that at zero).
+  const partnerDrawsRaw = db.workerLiquidity.filter(w=>!w.returned&&w.partnerId).reduce((s,w)=>s+num(w.amount),0);
+  const distCashPaid = (db.distributions||[]).reduce((s,d)=>s+num(d.amount)-(d.breakdown||[]).reduce((a,b)=>a+num(b.drawsAbsorbed),0),0);
+  const partnerDrawsOut = partnerDrawsTotal(db);          // still what the next distribution will absorb
+  // Partner funding = a temporary LOAN from a partner (not capital): cash in when lent, cash out when repaid.
+  const fundIn  = (db.partnerFunding||[]).filter(f=>f.kind!=='out').reduce((s,f)=>s+num(f.amount),0);
+  const fundOut = (db.partnerFunding||[]).filter(f=>f.kind==='out').reduce((s,f)=>s+num(f.amount),0);
+  const partnerLoans = fundIn - fundOut;                  // liability: what the business still owes partners
+  const cashBalance = db.capital + cashIn + collIn + fundIn - cashOutBuy - suppPaid - cashOutExp - traderOut - workerOut - partnerDrawsRaw - distCashPaid - fundOut;
   // Receivables / Payables (net of all payments including standalone)
   const receivable  = db.sales.reduce((s,r)=>s+(netAmt(r)-num(r.paid)),0) - collIn;
   const payable     = db.purchases.reduce((s,r)=>s+(netAmt(r)-num(r.paid)),0) - suppPaid;
   return {cashIn,collIn,cashOutBuy,suppPaid,cashOutExp,traderOut,workerOut,partnerDrawsOut,
+          partnerDrawsRaw,distCashPaid,fundIn,fundOut,partnerLoans,
           cashBalance,receivable,payable,invValue:inventoryValue,
           equity:db.capital+net-totalDistributed,totalDistributed};
 }
@@ -1169,6 +1189,13 @@ function partnerDraws(partnerId,excludeDistId,db=DB){
   return Math.max(0,raw-absorbed);
 }
 const partnerDrawsTotal = (db=DB) => db.partners.reduce((s,p)=>s+partnerDraws(p.id,undefined,db),0);
+// partnerLoanBalance: what the business still owes a partner for liquidity he lent (Σ in − Σ out).
+// excludeId skips the record being edited so the form validates against the rest of the ledger.
+function partnerLoanBalance(partnerId,excludeId,db=DB){
+  return (db.partnerFunding||[]).filter(f=>f.partnerId==partnerId && f.id!==excludeId)
+    .reduce((s,f)=>s+(f.kind==='out'?-num(f.amount):num(f.amount)),0);
+}
+const partnerLoansTotal = (db=DB) => (db.partnerFunding||[]).reduce((s,f)=>s+(f.kind==='out'?-num(f.amount):num(f.amount)),0);
 const dealNo = id => { const i=DB.purchases.findIndex(p=>p.id==id); return i>=0?`#${String(i+1).padStart(3,'0')}`:'—'; };
 const pLabel = p  => { const i=DB.purchases.indexOf(p); return `#${String(i+1).padStart(3,'0')} — ${p.material} · ${p.qty} ${p.unit} · ${sName(p.supplierId)} · ${p.date}`; };
 
@@ -1216,6 +1243,36 @@ function _buildRow(cols,r,onDel,onEdit){
 // Per-table UI state (search query, sort column/direction, page) — persists across re-renders,
 // keyed by opts.stateKey. UI-only; never written to the saved JSON file.
 let _tableUI = {};
+// Period presets for the table toolbar. Bounds are inclusive ISO dates compared as strings,
+// the same format every record stores its date in.
+const PERIODS=[['all','كل الفترات'],['2w','آخر أسبوعين'],['1m','آخر شهر'],['3m','آخر ٣ شهور'],['month','الشهر الحالي'],['custom','فترة مخصصة']];
+function periodBounds(period,from,to){
+  const iso=x=>x.toISOString().split('T')[0];
+  const back=n=>{ const t=new Date(); t.setDate(t.getDate()-n); return iso(t); };
+  if(period==='2w')     return [back(14),null];
+  if(period==='1m')     return [back(30),null];
+  if(period==='3m')     return [back(90),null];
+  if(period==='month')  return [iso(new Date()).slice(0,8)+'01',null];
+  if(period==='custom') return [from||null,to||null];
+  return [null,null];
+}
+// Table prefs (period, custom range, page size) are a per-device convenience kept in localStorage —
+// never part of the ledger file. Reads are guarded: a blocked store just means defaults.
+let _tablePrefs=null;
+function _loadTablePrefs(key){
+  try{ if(!_tablePrefs) _tablePrefs=JSON.parse(localStorage.getItem('pm_table_prefs')||'{}')||{}; }catch(e){ _tablePrefs={}; }
+  const p=_tablePrefs[key]; if(!p||typeof p!=='object') return {};
+  const out={};
+  if(PERIODS.some(([v])=>v===p.period)) out.period=p.period;
+  if(typeof p.from==='string') out.from=p.from;
+  if(typeof p.to==='string')   out.to=p.to;
+  if([0,25,50,100].includes(+p.pageSize)) out.pageSize=+p.pageSize;
+  return out;
+}
+function _saveTablePrefs(key,st){
+  try{ _tablePrefs=_tablePrefs||{}; _tablePrefs[key]={period:st.period,from:st.from,to:st.to,pageSize:st.pageSize};
+       localStorage.setItem('pm_table_prefs',JSON.stringify(_tablePrefs)); }catch(e){}
+}
 
 // makeTable — plain by default; pass opts.stateKey + (searchText | sort | pageSize) to enable
 // an interactive table (search box, click-to-sort headers, pagination). The search input rebuilds
@@ -1223,7 +1280,7 @@ let _tableUI = {};
 function makeTable(cols,rows,onDel,onEdit,opts={}){
   const emptyMsg='لا توجد بيانات — اضغط "+ إضافة" للبدء';
   const colspan=String(cols.length+((onDel||onEdit)?1:0));
-  const interactive = opts.stateKey && (opts.searchText || opts.sort || opts.pageSize);
+  const interactive = opts.stateKey && (opts.searchText || opts.sort || opts.pageSize || opts.dateKey);
 
   if(!interactive){
     const wrap=el('div',{cls:'tbl-wrap'}),tbl=el('table'),thead=el('thead'),hrow=el('tr');
@@ -1237,18 +1294,39 @@ function makeTable(cols,rows,onDel,onEdit,opts={}){
     return wrap;
   }
 
-  const st = _tableUI[opts.stateKey] || (_tableUI[opts.stateKey]={q:'',sortKey:null,sortDir:1,page:0});
+  const st = _tableUI[opts.stateKey] || (_tableUI[opts.stateKey]=Object.assign({q:'',sortKey:null,sortDir:1,page:0,period:'all',from:'',to:'',pageSize:opts.pageSize||0},_loadTablePrefs(opts.stateKey)));
   const outer=el('div');
 
-  // ── toolbar: search box + result count ──
+  // ── toolbar: search box + period filter + page size + result count ──
   let countEl=null;
-  if(opts.searchText){
+  if(opts.searchText || opts.dateKey || opts.pageSize){
     const bar=el('div',{cls:'tbl-toolbar'});
-    const si=document.createElement('input');
-    si.type='search'; si.className='tbl-search'; si.value=st.q;
-    si.placeholder=opts.searchPlaceholder||'🔎 بحث…'; si.setAttribute('aria-label','بحث في الجدول');
-    si.oninput=()=>{ st.q=si.value; st.page=0; refresh(); };
-    bar.appendChild(si);
+    if(opts.searchText){
+      const si=document.createElement('input');
+      si.type='search'; si.className='tbl-search'; si.value=st.q;
+      si.placeholder=opts.searchPlaceholder||'🔎 بحث…'; si.setAttribute('aria-label','بحث في الجدول');
+      si.oninput=()=>{ st.q=si.value; st.page=0; refresh(); };
+      bar.appendChild(si);
+    }
+    if(opts.dateKey){
+      const per=document.createElement('select'); per.className='tbl-select'; per.setAttribute('aria-label','عرض فترة');
+      PERIODS.forEach(([v,l])=>{ const o=document.createElement('option'); o.value=v; o.textContent=l; if(st.period===v) o.selected=true; per.appendChild(o); });
+      const range=el('span',{cls:'tbl-range'}); if(st.period!=='custom') range.style.display='none';
+      const fromI=document.createElement('input'); fromI.type='date'; fromI.className='tbl-date'; fromI.value=st.from||''; fromI.setAttribute('aria-label','من تاريخ');
+      const toI=document.createElement('input');   toI.type='date';   toI.className='tbl-date';   toI.value=st.to||'';     toI.setAttribute('aria-label','إلى تاريخ');
+      fromI.onchange=()=>{ st.from=fromI.value; st.page=0; _saveTablePrefs(opts.stateKey,st); refresh(); };
+      toI.onchange  =()=>{ st.to=toI.value;     st.page=0; _saveTablePrefs(opts.stateKey,st); refresh(); };
+      range.appendChild(el('span',{cls:'tbl-range-lbl'},'من')); range.appendChild(fromI);
+      range.appendChild(el('span',{cls:'tbl-range-lbl'},'إلى')); range.appendChild(toI);
+      per.onchange=()=>{ st.period=per.value; st.page=0; range.style.display=st.period==='custom'?'':'none'; _saveTablePrefs(opts.stateKey,st); refresh(); };
+      bar.appendChild(per); bar.appendChild(range);
+    }
+    if(opts.pageSize){
+      const ps=document.createElement('select'); ps.className='tbl-select'; ps.setAttribute('aria-label','عدد السجلات في الصفحة');
+      [[25,'25 في الصفحة'],[50,'50 في الصفحة'],[100,'100 في الصفحة'],[0,'عرض الكل']].forEach(([v,l])=>{ const o=document.createElement('option'); o.value=v; o.textContent=l; if(+st.pageSize===v) o.selected=true; ps.appendChild(o); });
+      ps.onchange=()=>{ st.pageSize=+ps.value; st.page=0; _saveTablePrefs(opts.stateKey,st); refresh(); };
+      bar.appendChild(ps);
+    }
     countEl=el('span',{cls:'tbl-count'}); bar.appendChild(countEl);
     outer.appendChild(bar);
   }
@@ -1282,6 +1360,14 @@ function makeTable(cols,rows,onDel,onEdit,opts={}){
       const q=st.q.trim().toLowerCase();
       rs=rs.filter(r=>String(opts.searchText(r)).toLowerCase().includes(q));
     }
+    if(opts.dateKey){
+      const [lo,hi]=periodBounds(st.period,st.from,st.to);
+      if(lo||hi) rs=rs.filter(r=>{ const d=r[opts.dateKey]; if(!d) return true; return (!lo||d>=lo)&&(!hi||d<=hi); });
+    }
+    if(!st.sortKey && opts.dateKey){
+      // newest first by default, so a fresh entry lands on page 1 instead of the last page
+      rs.sort((a,b)=>String(b[opts.dateKey]||'').localeCompare(String(a[opts.dateKey]||'')) || ((b.id||0)-(a.id||0)));
+    }
     if(st.sortKey){
       const col=cols.find(c=>c.key===st.sortKey);
       const val=r=> col&&col.sortVal ? col.sortVal(r) : (col ? r[col.key] : '');
@@ -1295,15 +1381,17 @@ function makeTable(cols,rows,onDel,onEdit,opts={}){
   function refresh(){
     const all=view(), total=all.length;
     let pageRows=all, pages=1;
-    if(opts.pageSize){
-      pages=Math.max(1,Math.ceil(total/opts.pageSize));
+    const ps = opts.pageSize ? (+st.pageSize>0 ? +st.pageSize : 0) : 0;   // 0 = show everything
+    if(ps){
+      pages=Math.max(1,Math.ceil(total/ps));
       st.page=Math.min(Math.max(0,st.page),pages-1);
-      pageRows=all.slice(st.page*opts.pageSize,(st.page+1)*opts.pageSize);
+      pageRows=all.slice(st.page*ps,(st.page+1)*ps);
     }
     tbody.innerHTML='';
     if(!pageRows.length){
       const tr=el('tr',{cls:'empty-row'});
-      tr.appendChild(el('td',{colspan}, st.q.trim()?'لا نتائج مطابقة للبحث':emptyMsg));
+      const periodOn = opts.dateKey && st.period!=='all';
+      tr.appendChild(el('td',{colspan}, st.q.trim()?'لا نتائج مطابقة للبحث':(periodOn?'لا توجد سجلات في الفترة المختارة — غيّر الفترة لعرض المزيد':emptyMsg)));
       tbody.appendChild(tr);
     } else pageRows.forEach(r=>tbody.appendChild(_buildRow(cols,r,onDel,onEdit)));
     // header sort indicators
@@ -1312,7 +1400,11 @@ function makeTable(cols,rows,onDel,onEdit,opts={}){
       th._arrow.textContent = on ? (st.sortDir>0?' ▲':' ▼') : (th._sortable?' ⇅':'');
       if(th._sortable) th.setAttribute('aria-sort', on?(st.sortDir>0?'ascending':'descending'):'none');
     });
-    if(countEl) countEl.textContent = st.q.trim()? `${total} نتيجة` : `${total} سجل`;
+    if(countEl){
+      let t = total!==rows.length ? `${total} من ${rows.length} سجل` : `${total} سجل`;
+      if(opts.sum && total) t += ` · إجمالي المعروض ${fmt(all.reduce((a,r)=>a+num(opts.sum(r)),0))}`;
+      countEl.textContent=t;
+    }
     if(pager){
       pager.innerHTML='';
       if(pages>1){
@@ -1440,7 +1532,7 @@ function renderPurchases(){
     msg+=' يمكنك التراجع خلال ٩ ثوانٍ بعد الحذف.';
     confirmDeleteRecord('purchases',id,'صفقة الشراء',msg);
   },r=>openEditModal('purchase',r),{
-    stateKey:'purchases', sort:true, pageSize:25,
+    stateKey:'purchases', sort:true, pageSize:25, dateKey:'date', sum:r=>netAmt(r),
     searchPlaceholder:'🔎 ابحث بالمورد أو المادة أو اللون أو المكان أو التاريخ…',
     searchText:p=>[dealNo(p.id),p.date,sName(p.supplierId),p.material,p.color,p.qty,p.actualQty||'',p.unit,p.price,p.discountNote||'',
                    ...(p.locations||[]).map(l=>`${l.loc} ${l.sub} ${l.desc}`)].join(' ')
@@ -1478,7 +1570,7 @@ function renderSales(){
             + ' يمكنك التراجع خلال ٩ ثوانٍ بعد الحذف.';
     confirmDeleteRecord('sales',id,'صفقة البيع',msg);
   },r=>openEditModal('sale',r),{
-    stateKey:'sales', sort:true, pageSize:25,
+    stateKey:'sales', sort:true, pageSize:25, dateKey:'date', sum:r=>netAmt(r),
     searchPlaceholder:'🔎 ابحث بالعميل أو المادة أو اللون أو المكان أو التاريخ…',
     searchText:s=>[s.date,cName(s.customerId),s.purchaseId?dealNo(s.purchaseId):'',s.material,s.color,s.qty,s.actualQty||'',s.unit,s.price,s.discountNote||'',
                    ...(s.fromLocations||[]).map(l=>`${l.loc} ${l.sub}`)].join(' ')
@@ -1869,7 +1961,11 @@ function renderContacts(){
   const list=isSup?DB.suppliers:DB.customers;
   wrap.appendChild(makeTable(cols,list,
     id=>deleteWithUndo(isSup?'suppliers':'customers', id, isSup?'المورد':'العميل'),
-    r=>openEditModal(isSup?'supplier':'customer',r)));
+    r=>openEditModal(isSup?'supplier':'customer',r),{
+    stateKey:isSup?'suppliers':'customers', sort:true, pageSize:50,
+    searchPlaceholder:'🔎 ابحث بالاسم أو التليفون أو المدينة…',
+    searchText:r=>[r.name,r.phone,r.city].join(' ')
+  }));
   const foot=el('div',{cls:'tbl-footer',style:'justify-content:flex-start'});
   const btn=el('button',{cls:'btn-primary'},`+ إضافة ${isSup?'مورد':'عميل'}`);
   btn.onclick=()=>openModal(isSup?'supplier':'customer');
@@ -1894,7 +1990,7 @@ function renderExpenses(){
   ];
   const wrap=el('div',{cls:'card'});
   wrap.appendChild(makeTable(cols,DB.expenses,id=>deleteWithUndo('expenses',id,'المصروف'),r=>openEditModal('expense',r),{
-    stateKey:'expenses', sort:true, pageSize:25,
+    stateKey:'expenses', sort:true, pageSize:25, dateKey:'date', sum:r=>r.amount,
     searchPlaceholder:'🔎 ابحث بالفئة أو البيان أو التاريخ…',
     searchText:e=>[e.date,e.cat,e.desc,e.amount].join(' ')
   }));
@@ -2195,6 +2291,7 @@ function buildAISnapshot(){
     الرصيد_النقدي:_aiRound(cash.cashBalance), ذمم_مدينة:_aiRound(cash.receivable), ذمم_دائنة:_aiRound(cash.payable),
     حقوق_الملكية:_aiRound(cash.equity), أرباح_موزّعة:_aiRound(cash.totalDistributed),
     مبالغ_مع_التجار:_aiRound(cash.traderOut), سيولة_مع_العاملين:_aiRound(cash.workerOut),
+    قروض_سيولة_مستحقة_للشركاء:_aiRound(cash.partnerLoans),
     عدد_السجلات:{مشتريات:DB.purchases.length, مبيعات:DB.sales.length, مصروفات:DB.expenses.length,
                  موردون:DB.suppliers.length, عملاء:DB.customers.length}
   };
@@ -2218,7 +2315,7 @@ function buildAISnapshot(){
   }
   if(sc.partners && DB.partners.length){
     snap['الشركاء'] = DB.partners.map((p,i)=>({الاسم:anon?`شريك-${i+1}`:p.name,
-      نسبة_الشراكة:num(p.sharePct), سحوبات_معلّقة:_aiRound(partnerDraws(p.id))}));
+      نسبة_الشراكة:num(p.sharePct), سحوبات_معلّقة:_aiRound(partnerDraws(p.id)), تمويل_سيولة_مستحق_له:_aiRound(partnerLoanBalance(p.id))}));
     if(DB.distributions.length) snap['توزيعات_الأرباح'] =
       DB.distributions.map(d=>({التاريخ:d.date, المبلغ:_aiRound(d.amount)}));
   }
@@ -2626,6 +2723,7 @@ function openModal(type){
     supplierPay:  {date:today(),supplierId:DB.suppliers[0]?.id,amount:'',note:''},
     traderAdv: {date:today(),name:'',desc:'',amount:'',settled:false},
     workerLiq: {date:today(),name:'',desc:'',amount:'',returned:false,partnerId:''},
+    partnerFund: {date:today(),partnerId:DB.partners[0]?.id??'',kind:'in',amount:'',note:''},
     supplier:{name:'',phone:'',city:'',linkedCustomerId:''},customer:{name:'',phone:'',city:'',linkSupplierId:''},
     partner:{name:'',sharePct:''},
     distribution:{date:today(),note:'',amount:''},
@@ -2642,6 +2740,7 @@ function openModal(type){
   _setImpactBase(type);
   renderModal();_openModalUI();
 }
+function openFundModal(kind){ openModal('partnerFund'); DB.form.kind=kind==='out'?'out':'in'; renderModal(); }
 function openEditModal(type,rec){
   DB.modal=type;
   DB.form={...rec,_expDesc:'',_expAmt:'',txExpenses:[...(rec.txExpenses||[])],_editId:rec.id};
@@ -2769,6 +2868,18 @@ function validateForm(type,f){
   else if(type==='collection'){ if(!req(f.customerId)) e.customerId='اختر العميل'; if(!pos(f.amount)) e.amount='أدخل مبلغاً أكبر من صفر'; }
   else if(type==='supplierPay'){ if(!req(f.supplierId)) e.supplierId='اختر المورد'; if(!pos(f.amount)) e.amount='أدخل مبلغاً أكبر من صفر'; }
   else if(type==='traderAdv'||type==='workerLiq'){ if(!req(f.name)) e.name='اكتب الاسم'; if(!pos(f.amount)) e.amount='أدخل مبلغاً أكبر من صفر'; }
+  else if(type==='partnerFund'){
+    if(!DB.partners.length) e._='أضف شريكاً واحداً على الأقل أولاً من شاشة "توزيع الأرباح"';
+    if(!req(f.partnerId)) e.partnerId='اختر الشريك';
+    if(!pos(f.amount)) e.amount='أدخل مبلغاً أكبر من صفر';
+    else if(f.kind==='out'){
+      const owed=+partnerLoanBalance(f.partnerId,f._editId).toFixed(2);
+      if(parseFloat(f.amount)>owed+1e-9)
+        e.amount = owed>0
+          ? `المستحق للشريك من التمويل ${fmt(owed)} بس — لو بياخد أكتر، سجّل الزيادة كسحب شريك من "سيولة مع العاملين"`
+          : 'الشريك ده ماعندوش تمويل مستحق يترد — لو بياخد فلوس، سجّلها كسحب شريك من "سيولة مع العاملين"';
+    }
+  }
   else if(type==='supplier'||type==='customer'){ if(!req(f.name)) e.name='اكتب الاسم'; }
   else if(type==='partner'){
     if(!req(f.name)) e.name='اكتب اسم الشريك';
@@ -2852,6 +2963,7 @@ function buildRecord(type, f){
   if(type==='supplierPay') return {list:'supplierPayments', rec:{date:f.date,supplierId:f.supplierId,amount:num(f.amount),note:(f.note||'').trim()}};
   if(type==='traderAdv')   return {list:'traderAdvances',   rec:{date:f.date,name:(f.name||'').trim(),desc:(f.desc||'').trim(),amount:num(f.amount),settled:f.settled||false}};
   if(type==='workerLiq')   return {list:'workerLiquidity',  rec:{date:f.date,name:(f.name||'').trim(),desc:(f.desc||'').trim(),amount:num(f.amount),returned:f.returned||false,partnerId:f.partnerId||null}};
+  if(type==='partnerFund') return {list:'partnerFunding',   rec:{date:f.date,partnerId:f.partnerId,kind:f.kind==='out'?'out':'in',amount:num(f.amount),note:(f.note||'').trim()}};
   if(type==='offset'){
     // A mutual offset = a customer collection + a supplier payment of the same amount → cash nets to zero,
     // receivable and payable both shrink. Both halves share an `offset` group id, assigned at save time.
@@ -2920,7 +3032,7 @@ function saveModal(){
     showToast(`✓ تمت المقاصة بمبلغ ${fmt(+num(f.amount).toFixed(2))} — اتسجلت تحصيل ودفعة بنفس القيمة`);
     return;
   }
-  if(['purchase','sale','expense','collection','supplierPay','traderAdv','workerLiq','distribution'].includes(DB.modal)){
+  if(['purchase','sale','expense','collection','supplierPay','traderAdv','workerLiq','partnerFund','distribution'].includes(DB.modal)){
     commitRecord(DB.modal,f);
   }
   else if(DB.modal==='supplier'){
@@ -3049,7 +3161,7 @@ function refreshInfoBox(){
 //  - "locations" only rearranges WHERE existing stock sits, no money or quantity changes.
 //  - "closing" just snapshots today's numbers, it doesn't change them.
 //  - party/partner edits change contact info or profit-share %, not a ledger entry.
-const IMPACT_TYPES=['purchase','sale','expense','collection','supplierPay','traderAdv','workerLiq','distribution','offset','capital'];
+const IMPACT_TYPES=['purchase','sale','expense','collection','supplierPay','traderAdv','workerLiq','partnerFund','distribution','offset','capital'];
 
 let _impactBase=null;   // the "before" snapshot — computed once when the modal opens, held fixed while it's open
 
@@ -3077,6 +3189,7 @@ function impactSnapshot(db,ctx){
     receivable:{label:'إجمالي مستحق عند العملاء',  v:k.receivable,     kind:'asset'},
     payable:   {label:'إجمالي مستحق للموردين',     v:k.payable,        kind:'liability'},
     inventory: {label:'قيمة المخزون',              v:c.inventoryValue, kind:'asset'},
+    loans:     {label:'قروض سيولة مستحقة للشركاء', v:k.partnerLoans,   kind:'liability'},
     net:       {label:'صافي الربح',                v:c.net,            kind:'equity'},
     equity:    {label:'حقوق الملكية',              v:k.equity,         kind:'equity'},
   };
@@ -3140,6 +3253,9 @@ function journalFor(type,f,rec){
   if(type==='supplierPay')  return [J(`دائنون: ${sName(rec.supplierId)}`,'الخزينة',num(rec.amount))];
   if(type==='traderAdv')    return [J(`عهدة تاجر: ${rec.name}`,'الخزينة',num(rec.amount))];
   if(type==='workerLiq')    return [J(rec.partnerId?`مسحوبات شريك: ${pName(rec.partnerId)}`:`سيولة عامل: ${rec.name}`,'الخزينة',num(rec.amount))];
+  if(type==='partnerFund')  return rec.kind==='out'
+      ? [J(`قرض سيولة من شريك: ${pName(rec.partnerId)}`,'الخزينة',num(rec.amount))]
+      : [J('الخزينة',`قرض سيولة من شريك: ${pName(rec.partnerId)}`,num(rec.amount))];
   if(type==='offset')       return [J(`دائنون: ${sName(f.supplierId)}`,`مدينون: ${cName(f.customerId)}`,num(f.amount))];
   if(type==='distribution') return [J('حقوق الملكية (أرباح موزّعة)','الخزينة',num(rec.amount))];
   if(type==='capital')      return num(rec.value)>DB.capital ? [J('الخزينة','رأس المال',+(num(rec.value)-DB.capital).toFixed(2))] : [];
@@ -3154,7 +3270,7 @@ function diffSnapshots(before,after){
     return {key,...after[key],before:b,after:a,delta:d};
   }).filter(r=>Math.abs(r.delta)>0.004 || r.party);
 }
-const IMPACT_ORDER=['partyS','partyC','cash','stock','avg','receivable','payable','inventory','net','equity'];
+const IMPACT_ORDER=['partyS','partyC','cash','stock','avg','receivable','payable','loans','inventory','net','equity'];
 
 function impactWarnings(rows,type){
   const warns=[];
@@ -3580,7 +3696,7 @@ function buildLinkSection(isSup){
 function renderModal(){
   const type=DB.modal;if(!type)return;
   const isEdit=!!DB.form._editId;
-  const titles={purchase:'مشتريات',sale:'مبيعات',expense:'مصروف',collection:'تحصيل من عميل',supplierPay:'دفعة لمورد',traderAdv:'مبلغ تاجر',workerLiq:'سيولة عامل',supplier:'مورد',customer:'عميل',partner:'شريك',distribution:'توزيع أرباح',capital:'رأس المال',closing:'تقفيل الميزانية'};
+  const titles={purchase:'مشتريات',sale:'مبيعات',expense:'مصروف',collection:'تحصيل من عميل',supplierPay:'دفعة لمورد',traderAdv:'مبلغ تاجر',workerLiq:'سيولة عامل',partnerFund:'تمويل سيولة من شريك (قرض)',supplier:'مورد',customer:'عميل',partner:'شريك',distribution:'توزيع أرباح',capital:'رأس المال',closing:'تقفيل الميزانية'};
   const editTitles={capital:'تعديل رأس المال',closing:'تقفيل الميزانية',locations:'📍 توزيع أماكن التخزين',offset:'⚖ مقاصة حساب موحد'};
   document.getElementById('modal-box').classList.toggle('wide',['purchase','sale','locations'].includes(type));
   document.getElementById('modal-title').textContent=editTitles[type]||((isEdit?'تعديل ':'إضافة ')+titles[type]);
@@ -3794,6 +3910,20 @@ function renderModal(){
       body.appendChild(fld('ربط بشريك (اختياري)',mkSel(pOpts,'partnerId')));
       body.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:-6px'},'لو المبلغ ده فعلياً سحب شريك على حساب أرباحه المستقبلية، اربطه هنا — هيتخصم تلقائياً من نصيبه أول ما يتم توزيع أرباح.'));
     }
+  } else if(type==='partnerFund'){
+    if(!DB.partners.length){
+      body.appendChild(el('div',{cls:'warn-box'},'⚠ لا يوجد شركاء مُعرَّفون — أضف شريكاً أولاً من قسم "توزيع الأرباح"'));
+    } else {
+      body.appendChild(fld('التاريخ',mkInp('date','date')));
+      body.appendChild(fld('الشريك',mkSel(DB.partners,'partnerId')));
+      body.appendChild(fld('نوع الحركة',mkSel([{id:'in',name:'الشريك حط سيولة في الخزنة (قرض مؤقت)'},{id:'out',name:'رد سيولة للشريك (سداد القرض)'}],'kind')));
+      const owed=partnerLoanBalance(DB.form.partnerId,DB.form._editId);
+      body.appendChild(el('div',{cls:'info-box info-sell'},`التمويل المستحق حالياً لـ ${esc(pName(DB.form.partnerId))}: ${fmt(owed)}`));
+      body.appendChild(fld('المبلغ (ج.م)',mkInp('number','amount','0')));
+      body.appendChild(fld('ملاحظة',mkInp('text','note','سبب التمويل، من أي تحصيل اتردّ...')));
+      body.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:-6px'},
+        'ده قرض مش زيادة رأس مال: بيزوّد الخزنة من غير ما يغيّر النسب أو الأرباح، وبيتقفل لما الشريك ياخد فلوسه. لو الشريك أخد أكتر من اللي حطّه، سجّل الزيادة كسحب شريك من "سيولة مع العاملين" علشان تتخصم من نصيبه في التوزيع الجاي.'));
+    }
   } else if(type==='partner'){
     body.appendChild(fld('اسم الشريك',mkInp('text','name','اسم الشريك')));
     body.appendChild(fld('نسبة الحصة (%)',mkInp('number','sharePct','0')));
@@ -3834,7 +3964,8 @@ function renderBalance(){
   // Cash, receivables & payables — single source of truth (shared with the AI snapshot).
   // invValue = unsold stock at weighted-average cost, carried as a Balance-sheet asset.
   const {cashIn,collIn,cashOutBuy,suppPaid,cashOutExp,traderOut,workerOut,
-         partnerDrawsOut,cashBalance,receivable,payable,invValue} = computedCash();
+         partnerDrawsOut,partnerDrawsRaw,distCashPaid,fundIn,fundOut,partnerLoans,
+         cashBalance,receivable,payable,invValue} = computedCash();
 
   const div=el('div',{style:'display:flex;flex-direction:column;gap:14px'});
 
@@ -3859,13 +3990,15 @@ function renderBalance(){
     {l:'رأس المال',v:DB.capital,plus:true},
     {l:'محصّل من العملاء (بالصفقات)',v:cashIn,plus:true},
     {l:'تحصيلات إضافية من العملاء',v:collIn,plus:true},
+    {l:'تمويل سيولة من الشركاء (قرض مؤقت)',v:fundIn,plus:true},
     {l:'مدفوع للموردين (بالصفقات)',v:cashOutBuy,plus:false},
     {l:'دفعات إضافية للموردين',v:suppPaid,plus:false},
     {l:'مصروفات تشغيلية وصفقات',v:cashOutExp,plus:false},
     {l:'مبالغ مع التجار (تحت الحساب)',v:traderOut,plus:false},
     {l:'سيولة مع العاملين',v:workerOut,plus:false},
-    {l:'سحوبات الشركاء المعلّقة (لم تُخصم بعد)',v:partnerDrawsOut,plus:false},
-    {l:'أرباح موزّعة على الشركاء',v:totalDistributed,plus:false},
+    {l:'سحوبات الشركاء (خرجت من الخزنة ولم تُسدَّد نقداً)',v:partnerDrawsRaw,plus:false},
+    {l:'أرباح موزّعة مدفوعة نقداً (بعد خصم السحوبات)',v:distCashPaid,plus:false},
+    {l:'رد تمويل سيولة للشركاء',v:fundOut,plus:false},
   ];
   liqRows.forEach(r=>{
     const row=el('div',{style:'display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px'});
@@ -3890,7 +4023,51 @@ function renderBalance(){
   recCard.appendChild(recGrid);
   recCard.appendChild(el('div',{style:'margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px'},
     `<span style="color:var(--muted)">إجمالي الأصول التقديري (نقد + مخزون + ذمم مدينة)</span><strong>${fmt(cashBalance+invValue+receivable)}</strong>`));
+  if(partnerLoans>0.004) recCard.appendChild(el('div',{style:'margin-top:8px;display:flex;justify-content:space-between;font-size:13px'},
+    `<span style="color:var(--muted)">قروض سيولة مستحقة للشركاء (التزام، مش حقوق ملكية)</span><strong class="c-red">${fmt(partnerLoans)}</strong>`));
   div.appendChild(recCard);
+
+  // ─ تمويل سيولة من الشركاء (قرض مؤقت)
+  const pfCard=el('div',{cls:'card'});
+  const pfHead=el('div',{style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px'});
+  pfHead.appendChild(el('div',{style:'font-size:13px;font-weight:600'},'🏦 تمويل سيولة من الشركاء (قرض مؤقت)'));
+  const pfBtns=el('div',{style:'display:flex;gap:8px'});
+  const pfIn=el('button',{cls:'btn-primary',style:'font-size:12px;padding:5px 14px'},'+ شريك حط سيولة');
+  pfIn.onclick=()=>openFundModal('in');
+  const pfOut=el('button',{cls:'btn-ghost',style:'font-size:12px;padding:5px 14px'},'− رد سيولة لشريك');
+  pfOut.onclick=()=>openFundModal('out');
+  pfBtns.appendChild(pfIn); pfBtns.appendChild(pfOut);
+  pfHead.appendChild(pfBtns);
+  pfCard.appendChild(pfHead);
+  pfCard.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-bottom:12px'},
+    'لما الخزنة تنزل وشريك يحط فلوس من جيبه، سجّلها هنا "حط سيولة" — الخزنة تزيد والمبلغ يتسجل التزام للشريك. ولما ياخد فلوسه (من تحصيل مثلاً) سجّلها "رد سيولة". كده اللي في التطبيق يفضل هو اللي في الخزنة فعلاً.'));
+  if(DB.partners.length){
+    const chips=el('div',{style:'display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px'});
+    DB.partners.forEach(p=>{
+      const b=partnerLoanBalance(p.id);
+      chips.appendChild(el('span',{cls:'badge',style:b>0.004?'background:var(--gold-soft);color:var(--gold-ink)':''},`${esc(p.name)}: ${b>0.004?'مستحق له '+fmt(b):'مفيش تمويل مستحق'}`));
+    });
+    pfCard.appendChild(chips);
+  }
+  const pfCols=[
+    {key:'date',label:'التاريخ'},
+    {key:'partner',label:'الشريك',render:r=>esc(pName(r.partnerId))},
+    {key:'kind',label:'الحركة',render:r=>r.kind==='out'
+      ?'<span class="badge badge-warning">رد سيولة للشريك (− خزنة)</span>'
+      :'<span class="badge badge-success">حط سيولة (+ خزنة)</span>'},
+    {key:'amount',label:'المبلغ',render:r=>aSpan(fmt(r.amount))},
+    {key:'note',label:'ملاحظة'},
+  ];
+  pfCard.appendChild(makeTable(pfCols,DB.partnerFunding,id=>deleteWithUndo('partnerFunding',id,'حركة التمويل'),r=>openEditModal('partnerFund',r),{
+    stateKey:'partnerFunding', sort:true, pageSize:25, dateKey:'date',
+    searchText:r=>[r.date,pName(r.partnerId),r.note,r.amount].join(' ')
+  }));
+  if(DB.partnerFunding.length){
+    const tot=el('div',{style:'margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px'});
+    tot.innerHTML=`<span style="color:var(--muted)">دخل الخزنة: <strong class="c-green">${fmt(fundIn)}</strong>  |  اتردّ: <strong class="c-amber">${fmt(fundOut)}</strong></span><span style="color:var(--muted)">مستحق للشركاء الآن: <strong class="${partnerLoans>0.004?'c-red':''}">${fmt(partnerLoans)}</strong></span>`;
+    pfCard.appendChild(tot);
+  }
+  div.appendChild(pfCard);
 
   // ─ مبالغ مع التجار
   const taCard=el('div',{cls:'card'});
@@ -3916,7 +4093,10 @@ function renderBalance(){
       return b;
     }},
   ];
-  taCard.appendChild(makeTable(taCols,DB.traderAdvances,id=>deleteWithUndo('traderAdvances',id,'مبلغ التاجر'),r=>openEditModal('traderAdv',r)));
+  taCard.appendChild(makeTable(taCols,DB.traderAdvances,id=>deleteWithUndo('traderAdvances',id,'مبلغ التاجر'),r=>openEditModal('traderAdv',r),{
+    stateKey:'traderAdvances', sort:true, pageSize:25, dateKey:'date', sum:r=>r.amount,
+    searchText:r=>[r.date,r.name,r.desc,r.amount].join(' ')
+  }));
   if(DB.traderAdvances.length){
     const tot=el('div',{style:'margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px'});
     const total=DB.traderAdvances.reduce((s,a)=>s+a.amount,0);
@@ -3963,6 +4143,10 @@ function renderBalance(){
       return '<span class="badge badge-warning">معلّق — يُخصم من نصيبه بالأرباح</span>';
     }},
     {key:'toggle',label:'',render:r=>{
+      // A partner draw a distribution already absorbed can't also be "paid back in cash" —
+      // that would credit the partner twice. Lock the toggle instead of letting the books drift.
+      if(r.partnerId && !r.returned && absStatus[r.id] && absStatus[r.id]!=='none')
+        return '<span style="font-size:11px;color:var(--faint)">اتخصم بالتوزيع</span>';
       const b=document.createElement('button');
       b.className='btn-ghost';b.style.cssText='font-size:11px;padding:3px 10px';
       b.textContent=r.returned?'فتح':(r.partnerId?'سداد نقدي':'تسليم');
@@ -3970,7 +4154,10 @@ function renderBalance(){
       return b;
     }},
   ];
-  wlCard.appendChild(makeTable(wlCols,DB.workerLiquidity,id=>deleteWithUndo('workerLiquidity',id,'سيولة العامل'),r=>openEditModal('workerLiq',r)));
+  wlCard.appendChild(makeTable(wlCols,DB.workerLiquidity,id=>deleteWithUndo('workerLiquidity',id,'سيولة العامل'),r=>openEditModal('workerLiq',r),{
+    stateKey:'workerLiquidity', sort:true, pageSize:25, dateKey:'date', sum:r=>r.amount,
+    searchText:r=>[r.date,r.name,r.desc,r.amount,r.partnerId?pName(r.partnerId):''].join(' ')
+  }));
   if(DB.workerLiquidity.length){
     const tot=el('div',{style:'margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px'});
     const total=DB.workerLiquidity.reduce((s,w)=>s+w.amount,0);
@@ -4012,16 +4199,8 @@ function renderBalance(){
 
 function closeBalance(){ openModal('closing'); }
 function doCloseBalance(note){
-  const {net,totalExp,totalTxExp,totalDistributed}=computed();
-  const cashIn   =DB.sales.reduce((s,r)=>s+r.paid,0);
-  const collIn   =DB.collections.reduce((s,r)=>s+r.amount,0);
-  const cashOutBuy=DB.purchases.reduce((s,r)=>s+r.paid,0);
-  const suppPaid =DB.supplierPayments.reduce((s,r)=>s+r.amount,0);
-  const cashOutExp=totalExp+totalTxExp;
-  const traderOut=DB.traderAdvances.filter(a=>!a.settled).reduce((s,a)=>s+a.amount,0);
-  const workerOut=DB.workerLiquidity.filter(w=>!w.returned&&!w.partnerId).reduce((s,w)=>s+w.amount,0);
-  const partnerDrawsOut=partnerDrawsTotal();
-  const cash=DB.capital+cashIn+collIn-cashOutBuy-suppPaid-cashOutExp-traderOut-workerOut-partnerDrawsOut-totalDistributed;
+  const {net}=computed();
+  const {cashBalance:cash}=computedCash();   // one formula for the whole app — the closing can never drift from the Balance screen
   DB.closings.push({id:uid(),date:new Date().toLocaleDateString('ar-EG',{year:'numeric',month:'long',day:'numeric'}),note:note||'',net,cash});
   markDirty();render();showToast('✓ تم تقفيل الميزانية بنجاح');
 }
@@ -4046,6 +4225,7 @@ function renderDistribution(){
       {key:'name',label:'اسم الشريك'},
       {key:'sharePct',label:'نسبة الحصة',render:r=>`<span style="font-weight:600">${r.sharePct}%</span>`},
       {key:'draws',label:'سحوبات معلّقة (تُخصم من نصيبه القادم)',render:r=>{const d=partnerDraws(r.id);return d>0?rSpan(fmt(d)):'<span style="color:var(--faint-2)">—</span>';}},
+      {key:'loan',label:'تمويل سيولة مستحق له (قرض)',render:r=>{const b=partnerLoanBalance(r.id);return b>0.004?`<span class="c-amber" style="font-weight:600">${fmt(b)}</span>`:'<span style="color:var(--faint-2)">—</span>';}},
     ];
     pCard.appendChild(makeTable(pCols,DB.partners,id=>deleteWithUndo('partners',id,'الشريك'),r=>openEditModal('partner',r)));
     const totalPct=DB.partners.reduce((s,p)=>s+(+p.sharePct||0),0);
@@ -4154,10 +4334,14 @@ function renderAccounts(){
   if(DB.collections.length){
     custCard.appendChild(el('div',{style:'font-size:12px;font-weight:600;color:var(--muted);margin:16px 0 8px;padding-top:14px;border-top:1px solid var(--border)'},'سجل التحصيلات'));
     const colCols=[
-      {key:'date',label:'التاريخ'},{key:'cust',label:'العميل',render:r=>esc(cName(r.customerId))},
+      {key:'date',label:'التاريخ'},{key:'cust',label:'العميل',sortVal:r=>cName(r.customerId),render:r=>esc(cName(r.customerId))},
       {key:'amount',label:'المبلغ',render:r=>gSpan(fmt(r.amount))},{key:'note',label:'ملاحظة'},
     ];
-    custCard.appendChild(makeTable(colCols,DB.collections,id=>deleteWithUndo('collections',id,'التحصيل'),r=>openEditModal('collection',r)));
+    custCard.appendChild(makeTable(colCols,DB.collections,id=>deleteWithUndo('collections',id,'التحصيل'),r=>openEditModal('collection',r),{
+      stateKey:'collections', sort:true, pageSize:25, dateKey:'date', sum:r=>r.amount,
+      searchPlaceholder:'🔎 ابحث بالعميل أو الملاحظة أو التاريخ…',
+      searchText:r=>[r.date,cName(r.customerId),r.note,r.amount].join(' ')
+    }));
   }
   div.appendChild(custCard);
 
@@ -4223,10 +4407,14 @@ function renderAccounts(){
   if(DB.supplierPayments.length){
     suppCard.appendChild(el('div',{style:'font-size:12px;font-weight:600;color:var(--muted);margin:16px 0 8px;padding-top:14px;border-top:1px solid var(--border)'},'سجل الدفعات'));
     const payCols=[
-      {key:'date',label:'التاريخ'},{key:'supp',label:'المورد',render:r=>esc(sName(r.supplierId))},
+      {key:'date',label:'التاريخ'},{key:'supp',label:'المورد',sortVal:r=>sName(r.supplierId),render:r=>esc(sName(r.supplierId))},
       {key:'amount',label:'المبلغ',render:r=>gSpan(fmt(r.amount))},{key:'note',label:'ملاحظة'},
     ];
-    suppCard.appendChild(makeTable(payCols,DB.supplierPayments,id=>deleteWithUndo('supplierPayments',id,'الدفعة'),r=>openEditModal('supplierPay',r)));
+    suppCard.appendChild(makeTable(payCols,DB.supplierPayments,id=>deleteWithUndo('supplierPayments',id,'الدفعة'),r=>openEditModal('supplierPay',r),{
+      stateKey:'supplierPayments', sort:true, pageSize:25, dateKey:'date', sum:r=>r.amount,
+      searchPlaceholder:'🔎 ابحث بالمورد أو الملاحظة أو التاريخ…',
+      searchText:r=>[r.date,sName(r.supplierId),r.note,r.amount].join(' ')
+    }));
   }
   div.appendChild(suppCard);
   return div;
