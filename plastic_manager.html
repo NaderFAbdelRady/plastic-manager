@@ -295,6 +295,20 @@ th.th-sort:hover{color:var(--accent-ink);background:var(--accent-soft)}
   #modal-box.has-impact.imp-open .modal-grid #impact-panel{display:block;margin-top:14px}
 }
 .warn-box{background:var(--gold-soft);color:var(--gold-ink);border:1px solid var(--gold-border);border-radius:var(--r-sm);padding:11px 15px;font-size:13px;margin-bottom:13px}
+.draft-card{border:1px solid var(--border);border-radius:var(--r-sm);padding:14px 16px;margin-bottom:12px;background:var(--surface)}
+.draft-card.pending{border-right:4px solid var(--gold)}
+.draft-card.approved{border-right:4px solid var(--pos)}
+.draft-card.rejected{border-right:4px solid var(--neg);opacity:.85}
+.draft-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;font-size:12.5px;color:var(--muted)}
+.draft-quote{background:var(--surface-2);border-radius:var(--r-sm);padding:10px 14px;font-size:13.5px;line-height:1.8;margin:6px 0 10px;border-right:3px solid var(--border-strong)}
+.draft-fields{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;margin-bottom:10px}
+.draft-fields span b{color:var(--ink)}
+.draft-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.draft-conv{font-size:12.5px;color:var(--muted);margin-top:6px}
+.draft-conv summary{cursor:pointer;font-weight:600}
+.draft-conv div{padding:3px 0}
+.draft-filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.btn-danger-soft{background:var(--surface);color:var(--neg);border:1px solid var(--neg);border-radius:var(--r-sm);padding:7px 15px;font-size:12.5px;font-weight:700;font-family:inherit;cursor:pointer}
 .c-green{color:var(--pos)}.c-red{color:var(--neg)}.c-amber{color:var(--gold-ink)}
 #file-import{display:none}
 
@@ -589,7 +603,8 @@ let DB = {
   collections:[],
   supplierPayments:[],
   partners:[],
-  distributions:[]
+  distributions:[],
+  drafts:[]            // صندوق المراجعة: مسودات حركات (من الميدان / لصق) تنتظر الاعتماد — أرشيف لا يُحذف
 };
 
 // ── Local autosave & dirty tracking ───────────────────────────────────────────
@@ -767,6 +782,7 @@ function buildPayload() {
     supplierPayments: DB.supplierPayments,
     partners:       DB.partners,
     distributions:  DB.distributions,
+    drafts:         DB.drafts,
   };
 }
 
@@ -818,7 +834,7 @@ async function exportData() {
 // Records already holding valid objects & numbers are unchanged, so existing saved files load identically.
 function _sanitizeData(d){
   const RECORD_ARRAYS = ['suppliers','customers','purchases','sales','expenses','traderAdvances',
-                         'workerLiquidity','partnerFunding','closings','collections','supplierPayments','partners','distributions'];
+                         'workerLiquidity','partnerFunding','closings','collections','supplierPayments','partners','distributions','drafts'];
   RECORD_ARRAYS.forEach(k=>{
     d[k] = Array.isArray(d[k]) ? d[k].filter(r => r && typeof r === 'object') : [];
   });
@@ -848,6 +864,15 @@ function _sanitizeData(d){
     r.breakdown = Array.isArray(r.breakdown)
       ? r.breakdown.filter(b=>b&&typeof b==='object').map(b=>({...b, gross:num(b.gross), drawsAbsorbed:num(b.drawsAbsorbed), net:num(b.net)})) : []; });
   d.closings.forEach(r=>{ r.net=num(r.net); r.cash=num(r.cash); });
+  d.drafts.forEach(r=>{
+    r.status = ['pending','approved','rejected'].includes(r.status) ? r.status : 'pending';
+    r.type   = DRAFT_TYPES[r.type] ? r.type : 'purchase';
+    r.fields = (r.fields && typeof r.fields==='object') ? r.fields : {};
+    r.conversation = Array.isArray(r.conversation) ? r.conversation.filter(m=>m&&typeof m==='object') : [];
+    r.transcript = typeof r.transcript==='string' ? r.transcript : '';
+    r.submittedBy = typeof r.submittedBy==='string' ? r.submittedBy : '';
+    r.review = (r.review && typeof r.review==='object') ? r.review : null;
+  });
   d.capital = num(d.capital);
   return d;
 }
@@ -874,7 +899,8 @@ function loadJsonText(text, source, opts={}) {
     DB.supplierPayments= d.supplierPayments|| [];
     DB.partners        = d.partners        || [];
     DB.distributions   = d.distributions   || [];
-    const allIds = [...DB.suppliers,...DB.customers,...DB.purchases,...DB.sales,...DB.expenses,...DB.traderAdvances,...DB.workerLiquidity,...DB.partnerFunding,...DB.collections,...DB.supplierPayments,...DB.partners,...DB.distributions].map(x=>(x&&x.id)||0);
+    DB.drafts          = d.drafts          || [];
+    const allIds = [...DB.suppliers,...DB.customers,...DB.purchases,...DB.sales,...DB.expenses,...DB.traderAdvances,...DB.workerLiquidity,...DB.partnerFunding,...DB.collections,...DB.supplierPayments,...DB.partners,...DB.distributions,...DB.drafts].map(x=>(x&&x.id)||0);
     if (allIds.length) _uid = Math.max(_uid, ...allIds) + 1;
     DB.view = 'dashboard';
     render();
@@ -953,7 +979,7 @@ function closeConfirm() {
 }
 const DATA_KEYS = ['suppliers','customers','purchases','sales','expenses','materials','capital',
                    'traderAdvances','workerLiquidity','partnerFunding','closings','collections','supplierPayments',
-                   'partners','distributions'];
+                   'partners','distributions','drafts'];
 function clearAllData() {
   const snap = {};                                  // full snapshot so even "مسح الكل" is undoable
   DATA_KEYS.forEach(k => snap[k] = DB[k]);
@@ -961,7 +987,7 @@ function clearAllData() {
   DB.materials=[...DEFAULT_MATS];
   DB.capital=0; DB.traderAdvances=[]; DB.workerLiquidity=[]; DB.partnerFunding=[]; DB.closings=[];
   DB.collections=[]; DB.supplierPayments=[];
-  DB.partners=[]; DB.distributions=[];
+  DB.partners=[]; DB.distributions=[]; DB.drafts=[];
   DB.view='dashboard';
   markDirty(); render();
   showUndoToast('✓ تم مسح جميع البيانات', () => {
@@ -1203,10 +1229,10 @@ const pLabel = p  => { const i=DB.purchases.indexOf(p); return `#${String(i+1).p
 const NAV=[
   {id:'dashboard',l:'لوحة التحكم'},{id:'purchases',l:'المشتريات'},{id:'sales',l:'المبيعات'},
   {id:'inventory',l:'المخزون'},{id:'contacts',l:'الموردون والعملاء'},{id:'expenses',l:'المصروفات'},
-  {id:'accounts',l:'حسابات الأطراف'},{id:'pl',l:'الأرباح والخسائر'},{id:'balance',l:'الميزانية والسيولة'},
+  {id:'accounts',l:'حسابات الأطراف'},{id:'drafts',l:'صندوق المراجعة'},{id:'pl',l:'الأرباح والخسائر'},{id:'balance',l:'الميزانية والسيولة'},
   {id:'distribution',l:'توزيع الأرباح'},{id:'ai',l:'المستشار الذكي'},
 ];
-const TITLES={dashboard:'لوحة التحكم',purchases:'المشتريات',sales:'المبيعات',inventory:'المخزون',contacts:'الموردون والعملاء',expenses:'المصروفات',accounts:'حسابات الأطراف',pl:'الأرباح والخسائر',balance:'الميزانية والسيولة',distribution:'توزيع الأرباح',ai:'المستشار الذكي'};
+const TITLES={dashboard:'لوحة التحكم',purchases:'المشتريات',sales:'المبيعات',inventory:'المخزون',contacts:'الموردون والعملاء',expenses:'المصروفات',accounts:'حسابات الأطراف',drafts:'صندوق المراجعة',pl:'الأرباح والخسائر',balance:'الميزانية والسيولة',distribution:'توزيع الأرباح',ai:'المستشار الذكي'};
 
 function el(tag,attrs={},inner=''){
   const e=document.createElement(tag);
@@ -2729,6 +2755,8 @@ function openModal(type){
     distribution:{date:today(),note:'',amount:''},
     capital:{amount:DB.capital},
     closing:{note:''},
+    draftPaste:{text:''},
+    draftReject:{note:'',_draftId:null},
   };
   DB.modal=type;DB.form={...defs[type]};
   // No supplier / customer yet? open the inline quick-create panel straight away
@@ -2868,6 +2896,11 @@ function validateForm(type,f){
   else if(type==='collection'){ if(!req(f.customerId)) e.customerId='اختر العميل'; if(!pos(f.amount)) e.amount='أدخل مبلغاً أكبر من صفر'; }
   else if(type==='supplierPay'){ if(!req(f.supplierId)) e.supplierId='اختر المورد'; if(!pos(f.amount)) e.amount='أدخل مبلغاً أكبر من صفر'; }
   else if(type==='traderAdv'||type==='workerLiq'){ if(!req(f.name)) e.name='اكتب الاسم'; if(!pos(f.amount)) e.amount='أدخل مبلغاً أكبر من صفر'; }
+  else if(type==='draftPaste'){
+    const r=_parseDraftText(f.text);
+    if(r.error) e.text=r.error;
+  }
+  else if(type==='draftReject'){ if(!req(f.note)) e.note='اكتب سبب الرفض'; }
   else if(type==='partnerFund'){
     if(!DB.partners.length) e._='أضف شريكاً واحداً على الأقل أولاً من شاشة "توزيع الأرباح"';
     if(!req(f.partnerId)) e.partnerId='اختر الشريك';
@@ -3032,8 +3065,33 @@ function saveModal(){
     showToast(`✓ تمت المقاصة بمبلغ ${fmt(+num(f.amount).toFixed(2))} — اتسجلت تحصيل ودفعة بنفس القيمة`);
     return;
   }
+  if(DB.modal==='draftPaste'){
+    const r=_parseDraftText(f.text);
+    const now=new Date().toISOString();
+    r.drafts.forEach(d=>{ DB.drafts=[...DB.drafts,{...d,id:uid(),receivedAt:now,status:'pending',review:null,ledgerList:null,ledgerId:null,final:null,source:d.source||'paste'}]; });
+    markDirty(); closeModal(); DB.view='drafts'; render();
+    showToast(`✓ دخلت ${r.drafts.length} ${r.drafts.length===1?'مسودة':'مسودات'} صندوق المراجعة`);
+    return;
+  }
+  if(DB.modal==='draftReject'){
+    DB.drafts=DB.drafts.map(d=>d.id===f._draftId?{...d,status:'rejected',review:{at:new Date().toISOString(),note:(f.note||'').trim()}}:d);
+    markDirty(); closeModal(); render();
+    showToast('✓ المسودة اترفضت واتحفظ السبب');
+    return;
+  }
   if(['purchase','sale','expense','collection','supplierPay','traderAdv','workerLiq','partnerFund','distribution'].includes(DB.modal)){
     commitRecord(DB.modal,f);
+    if(f._draftId && !isEdit){
+      // approval = the record the reviewer just saved; link both ways so the deal can be traced to its draft
+      const list=DRAFT_TYPES[DB.modal]?.list;
+      const rec=list ? DB[list][DB[list].length-1] : null;
+      if(rec){
+        rec.draftId=f._draftId;
+        const {id:_omit,...final}=rec;
+        DB.drafts=DB.drafts.map(d=>d.id===f._draftId?{...d,status:'approved',review:{at:new Date().toISOString(),note:''},ledgerList:list,ledgerId:rec.id,final}:d);
+        showToast('✓ المسودة اتعتمدت واتسجلت في الدفاتر');
+      }
+    }
   }
   else if(DB.modal==='supplier'){
     const rec={name:(f.name||'').trim(),phone:(f.phone||'').trim(),city:(f.city||'').trim()};
@@ -3697,13 +3755,46 @@ function renderModal(){
   const type=DB.modal;if(!type)return;
   const isEdit=!!DB.form._editId;
   const titles={purchase:'مشتريات',sale:'مبيعات',expense:'مصروف',collection:'تحصيل من عميل',supplierPay:'دفعة لمورد',traderAdv:'مبلغ تاجر',workerLiq:'سيولة عامل',partnerFund:'تمويل سيولة من شريك (قرض)',supplier:'مورد',customer:'عميل',partner:'شريك',distribution:'توزيع أرباح',capital:'رأس المال',closing:'تقفيل الميزانية'};
-  const editTitles={capital:'تعديل رأس المال',closing:'تقفيل الميزانية',locations:'📍 توزيع أماكن التخزين',offset:'⚖ مقاصة حساب موحد'};
-  document.getElementById('modal-box').classList.toggle('wide',['purchase','sale','locations'].includes(type));
+  const editTitles={capital:'تعديل رأس المال',closing:'تقفيل الميزانية',locations:'📍 توزيع أماكن التخزين',offset:'⚖ مقاصة حساب موحد',draftPaste:'📥 لصق مسودة للمراجعة',draftReject:'رفض المسودة'};
+  document.getElementById('modal-box').classList.toggle('wide',['purchase','sale','locations','draftPaste'].includes(type));
   document.getElementById('modal-title').textContent=editTitles[type]||((isEdit?'تعديل ':'إضافة ')+titles[type]);
   const body=document.getElementById('modal-body');body.innerHTML='';
   const f=DB.form;
   if(f._errors && f._errors._){
     body.appendChild(el('div',{cls:'form-error-banner'},esc(f._errors._)));
+  }
+  // A form opened from the review inbox: show the original words and what could not be matched,
+  // so the reviewer judges the AI's reading against the source, not just the filled fields.
+  if(f._draftId){
+    const d=(DB.drafts||[]).find(x=>x.id===f._draftId);
+    if(d){
+      body.appendChild(el('div',{cls:'info-box info-sell',style:'line-height:1.9'},
+        `📥 <strong>مراجعة مسودة</strong> من ${esc(d.submittedBy||'غير معروف')} · ${esc(_draftWhen(d))}<br><span style="opacity:.9">«${esc(d.transcript||'بدون نص')}»</span>`));
+      if(f._draftWarnings && f._draftWarnings.length)
+        body.appendChild(el('div',{cls:'warn-box',style:'line-height:1.9'},'⚠ راجع قبل الحفظ:<br>'+f._draftWarnings.map(esc).join('<br>')));
+    }
+  }
+  if(type==='draftPaste'){
+    body.appendChild(el('div',{style:'font-size:13px;color:var(--muted);margin-bottom:10px;line-height:1.7'},
+      'الصق هنا مسودة واحدة أو قائمة مسودات بصيغة JSON زي اللي بتبعتها صفحة التسجيل. المسودة بتدخل الصندوق "معلّقة" ومش بتلمس الدفاتر لحد ما تعتمدها.'));
+    const ta=document.createElement('textarea'); ta.className='ai-ta'; ta.style.minHeight='180px'; ta.dir='ltr';
+    ta.placeholder='{"type":"purchase","submittedBy":"...","transcript":"...","fields":{...}}';
+    ta.value=f.text||''; ta.dataset.key='text'; ta.oninput=e=>setFQuiet('text',e.target.value);
+    if(f._errors && f._errors.text) ta.classList.add('invalid');
+    body.appendChild(fld('المسودة (JSON)',ta));
+    const ex=el('button',{cls:'btn-ghost',type:'button',style:'font-size:12px;padding:5px 12px'},'املأ مثالاً للتجربة');
+    ex.onclick=()=>{ DB.form.text=JSON.stringify(DRAFT_SAMPLE,null,1); renderModal(); };
+    body.appendChild(ex);
+    renderImpactPanel();
+    return;
+  }
+  if(type==='draftReject'){
+    const d=(DB.drafts||[]).find(x=>x.id===f._draftId);
+    if(d) body.appendChild(el('div',{cls:'draft-quote'},esc(d.transcript||_draftSummary(d))));
+    body.appendChild(fld('سبب الرفض',mkInp('text','note','مثال: الوزن غلط، الصفقة متسجلة قبل كده...')));
+    body.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:-6px'},'المسودة المرفوضة بتفضل في الصندوق بسببها — مفيش حذف.'));
+    renderImpactPanel();
+    return;
   }
   if(type==='capital'){
     body.appendChild(fld('قيمة رأس المال المستثمر (ج.م)',mkInp('number','amount','0')));
@@ -3957,6 +4048,150 @@ function renderModal(){
 }
 
 // ── Balance View ──────────────────────────────────────────────────────────────
+// ── Review inbox (صندوق المراجعة) ─────────────────────────────────────────────
+// A draft is a transaction someone captured in the field (voice / text / pasted JSON). It never
+// touches the ledger by itself: the reviewer opens it in the ordinary form, sees the impact panel,
+// edits if needed and saves — that save is the approval. Rejected drafts stay, with the reason.
+const DRAFT_TYPES={
+  purchase:   {label:'شراء',        list:'purchases',        party:'supplier'},
+  sale:       {label:'بيع',         list:'sales',            party:'customer'},
+  expense:    {label:'مصروف',       list:'expenses',         party:null},
+  collection: {label:'تحصيل من عميل',list:'collections',     party:'customer'},
+  supplierPay:{label:'دفعة لمورد',  list:'supplierPayments', party:'supplier'},
+};
+const DRAFT_SAMPLE=[
+  {type:'purchase',submittedBy:'عز',transcript:'اشتريت من هاني عيسي ٢٠٧٠ كيلو ABS بـ ٢٧ ودفعت له ٣٠ ألف والباقي آجل، النقل ألف جنيه، البضاعة في مخزن ٤',
+   fields:{date:today(),party:'هاني عيسي',material:'ABS',qty:2070,unit:'كيلوجرام',price:27,paid:30000,txExpenses:[{desc:'نقل',amount:1000}],location:'مخزن 4'},
+   conversation:[{role:'assistant',text:'المدفوع ٣٠ ألف كاش والباقي على الحساب، صح؟'},{role:'user',text:'أيوه'}]},
+  {type:'expense',submittedBy:'عز',transcript:'دفعت ٣٥٠ جنيه توكتوك مشوار تحصيل فليكس',
+   fields:{date:today(),cat:'نقل',desc:'توكتوك مشوار تحصيل فليكس',amount:350},conversation:[]},
+];
+const _draftWhen = d => { const t=d.createdAt||d.receivedAt; if(!t) return ''; try{ return new Date(t).toLocaleString('ar-EG',{dateStyle:'medium',timeStyle:'short'}); }catch(e){ return String(t); } };
+function _draftSummary(d){
+  const f=d.fields||{}, parts=[];
+  if(f.party) parts.push(f.party);
+  if(f.material) parts.push(`${f.material}${f.qty?' '+fq(f.qty)+' '+(f.unit||'كجم'):''}`);
+  if(f.price) parts.push(`بسعر ${fmt(f.price)}`);
+  if(f.amount) parts.push(fmt(f.amount));
+  if(f.cat||f.desc) parts.push([f.cat,f.desc].filter(Boolean).join(' · '));
+  return parts.join(' — ') || 'بدون تفاصيل';
+}
+// _parseDraftText: pasted JSON → validated draft objects (one or many). Errors are human sentences.
+function _parseDraftText(text){
+  let v; try{ v=JSON.parse(String(text||'').trim()); }catch(e){ return {error:'النص مش JSON صحيح — انسخ المسودة كاملة من صفحة التسجيل'}; }
+  const arr=Array.isArray(v)?v:[v];
+  if(!arr.length) return {error:'القائمة فاضية'};
+  const drafts=[];
+  for(const d of arr){
+    if(!d||typeof d!=='object') return {error:'في عنصر مش مسودة'};
+    if(!DRAFT_TYPES[d.type]) return {error:`نوع الحركة "${d.type}" مش معروف — المسموح: ${Object.keys(DRAFT_TYPES).join(', ')}`};
+    if(!d.fields||typeof d.fields!=='object') return {error:'المسودة ناقصها الحقول (fields)'};
+    drafts.push({remoteId:d.id!=null?String(d.id):null, createdAt:typeof d.createdAt==='string'?d.createdAt:new Date().toISOString(),
+      submittedBy:String(d.submittedBy||'').trim(), transcript:String(d.transcript||'').trim(), type:d.type, fields:{...d.fields},
+      conversation:Array.isArray(d.conversation)?d.conversation.filter(m=>m&&typeof m==='object').map(m=>({role:m.role==='assistant'?'assistant':'user',text:String(m.text||'')})):[],
+      source:typeof d.source==='string'?d.source:'paste'});
+  }
+  return {drafts};
+}
+// _matchName: find a party/material by name the way a person would — ignoring hamza/ta-marbuta/spacing,
+// then falling back to "contains" in either direction. Returns the record or null.
+function _matchName(list,name,get=x=>x.name){
+  const q=_normName(name); if(!q) return null;
+  return list.find(x=>_normName(get(x))===q) || list.find(x=>_normName(get(x)).includes(q)||q.includes(_normName(get(x)))) || null;
+}
+// _draftToForm: map a draft's free-form fields onto the real form's keys and resolve names → ids.
+// Anything that could not be matched becomes a warning the reviewer sees above the form.
+function _draftToForm(d){
+  const f=d.fields||{}, warn=[], out={date:(/^\d{4}-\d{2}-\d{2}$/.test(f.date||'')?f.date:today())};
+  const t=DRAFT_TYPES[d.type];
+  if(t.party==='supplier'){
+    const s=_matchName(DB.suppliers,f.party||'');
+    if(s) out.supplierId=s.id; else warn.push(`المورد "${f.party||'؟'}" مش موجود في القائمة — اختاره من القائمة أو أضفه الأول`);
+  }
+  if(t.party==='customer'){
+    const c=_matchName(DB.customers,f.party||'');
+    if(c) out.customerId=c.id; else warn.push(`العميل "${f.party||'؟'}" مش موجود في القائمة — اختاره من القائمة أو أضفه الأول`);
+  }
+  if(d.type==='purchase'||d.type==='sale'){
+    const m=f.material ? (DB.materials.find(x=>x.toLowerCase()===String(f.material).toLowerCase()) || _matchName(DB.materials,f.material,x=>x)) : null;
+    if(m) out.material=m; else warn.push(`الخامة "${f.material||'؟'}" مش في قائمة الخامات — اختارها أو أضفها من شاشة المخزون`);
+    out.qty=num(f.qty)||''; out.price=num(f.price)||''; out.paid=num(f.paid)||'';
+    out.unit=(f.unit&&/طن/.test(f.unit))?'طن':'كيلوجرام';
+    out.color=f.color||''; out.discount=num(f.discount)||'';
+    out.txExpenses=Array.isArray(f.txExpenses)?f.txExpenses.filter(e=>e&&num(e.amount)>0).map(e=>({desc:String(e.desc||'مصاريف'),amount:num(e.amount)})):[];
+    if(f.location) warn.push(`مكان التخزين المذكور: "${f.location}" — وزّعه من زرار الأماكن بعد الحفظ`);
+    if(d.type==='sale') warn.push('اربط البيع بصفقة الشراء اللي البضاعة خرجت منها لو معروفة');
+  }
+  if(d.type==='expense'){
+    out.cat=EXP_CATS.includes(f.cat)?f.cat:'متفرقات'; if(f.cat&&!EXP_CATS.includes(f.cat)) warn.push(`الفئة "${f.cat}" مش موجودة — اتحطت تحت "متفرقات"`);
+    out.desc=f.desc||f.note||''; out.amount=num(f.amount)||'';
+  }
+  if(d.type==='collection'||d.type==='supplierPay'){ out.amount=num(f.amount)||''; out.note=f.note||f.desc||''; }
+  return {form:out,warnings:warn};
+}
+function reviewDraft(id){
+  const d=DB.drafts.find(x=>x.id===id); if(!d||d.status!=='pending') return;
+  const {form,warnings}=_draftToForm(d);
+  openModal(d.type);
+  Object.assign(DB.form,form,{_draftId:id,_draftWarnings:warnings});
+  renderModal(); refreshInfoBox();
+}
+function rejectDraft(id){ openModal('draftReject'); DB.form._draftId=id; renderModal(); }
+function renderDrafts(){
+  DB.draftsTab = DB.draftsTab||'pending';
+  const all=DB.drafts||[];
+  const counts={pending:0,approved:0,rejected:0}; all.forEach(d=>counts[d.status]=(counts[d.status]||0)+1);
+  const wrap=el('div',{cls:'card'});
+  const head=el('div',{style:'display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px'});
+  head.appendChild(el('div',{style:'font-size:13px;color:var(--muted);line-height:1.7'},
+    'المسودات اللي بتوصل من الميدان بتقف هنا. افتح أي واحدة في الفورم، راجع التأثير، عدّل لو لازم، واحفظ — الحفظ هو الاعتماد. المرفوض بيفضل موجود بسببه.'));
+  const pasteBtn=el('button',{cls:'btn-primary',style:'font-size:12px;padding:6px 14px'},'📥 لصق مسودة');
+  pasteBtn.onclick=()=>openModal('draftPaste');
+  head.appendChild(pasteBtn); wrap.appendChild(head);
+  const filters=el('div',{cls:'draft-filters'});
+  [['pending',`معلّق (${counts.pending})`],['approved',`معتمد (${counts.approved})`],['rejected',`مرفوض (${counts.rejected})`],['all',`الكل (${all.length})`]].forEach(([k,l])=>{
+    const b=el('button',{cls:`pl-chip${DB.draftsTab===k?' on':''}`},l); b.onclick=()=>{DB.draftsTab=k;render();}; filters.appendChild(b);
+  });
+  wrap.appendChild(filters);
+  const rows=all.filter(d=>DB.draftsTab==='all'||d.status===DB.draftsTab).slice().sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||''))||(b.id-a.id));
+  if(!rows.length){ wrap.appendChild(el('div',{style:'color:var(--faint);font-size:13px;padding:18px 0;text-align:center'},DB.draftsTab==='pending'?'مفيش مسودات معلّقة — الصندوق فاضي':'لا توجد مسودات هنا')); return wrap; }
+  const badge={pending:'<span class="badge badge-warning">معلّقة</span>',approved:'<span class="badge badge-success">معتمدة</span>',rejected:'<span class="badge badge-danger">مرفوضة</span>'};
+  rows.forEach(d=>{
+    const t=DRAFT_TYPES[d.type]||{label:d.type};
+    const c=el('div',{cls:`draft-card ${d.status}`});
+    const h=el('div',{cls:'draft-head'});
+    h.appendChild(el('span',{},`${badge[d.status]||''} <strong style="color:var(--ink)">${esc(t.label)}</strong> · من ${esc(d.submittedBy||'غير معروف')}${d.source==='voice'?' · 🎤':''}`));
+    h.appendChild(el('span',{},esc(_draftWhen(d))));
+    c.appendChild(h);
+    if(d.transcript) c.appendChild(el('div',{cls:'draft-quote'},'«'+esc(d.transcript)+'»'));
+    const f=d.fields||{}; const fl=el('div',{cls:'draft-fields'});
+    const add=(l,v)=>{ if(v!==undefined&&v!==null&&v!=='') fl.appendChild(el('span',{},`${esc(l)}: <b>${esc(String(v))}</b>`)); };
+    add('التاريخ',f.date); add(t.party==='supplier'?'المورد':'العميل',f.party); add('الخامة',f.material); add('الوزن',f.qty?`${fq(f.qty)} ${f.unit||'كجم'}`:''); add('السعر',f.price?fmt(f.price):''); add('المدفوع',f.paid!=null&&f.paid!==''?fmt(f.paid):'');
+    add('المبلغ',f.amount?fmt(f.amount):''); add('الفئة',f.cat); add('البيان',f.desc||f.note); add('المكان',f.location);
+    if(Array.isArray(f.txExpenses)&&f.txExpenses.length) add('مصاريف الصفقة',f.txExpenses.map(e=>`${e.desc} ${fmt(e.amount)}`).join('، '));
+    c.appendChild(fl);
+    if(d.conversation&&d.conversation.length){
+      const det=document.createElement('details'); det.className='draft-conv';
+      const sm=document.createElement('summary'); sm.textContent=`المحادثة (${d.conversation.length})`; det.appendChild(sm);
+      d.conversation.forEach(m=>det.appendChild(el('div',{},`${m.role==='assistant'?'🤖':'🗣'} ${esc(m.text||'')}`)));
+      c.appendChild(det);
+    }
+    if(d.status==='approved'){
+      const lbl=d.ledgerList==='purchases'?dealNo(d.ledgerId):`#${d.ledgerId}`;
+      c.appendChild(el('div',{style:'font-size:12px;color:var(--pos);margin-top:6px'},`✓ اتسجلت في الدفاتر (${esc(t.label)} ${esc(lbl)}) · ${esc(_draftWhen({createdAt:d.review?.at}))}`));
+    }
+    if(d.status==='rejected') c.appendChild(el('div',{style:'font-size:12px;color:var(--neg);margin-top:6px'},`✗ مرفوضة: ${esc(d.review?.note||'')} · ${esc(_draftWhen({createdAt:d.review?.at}))}`));
+    if(d.status==='pending'){
+      const act=el('div',{cls:'draft-actions'});
+      const ok=el('button',{cls:'btn-primary',style:'font-size:12.5px;padding:7px 16px'},'راجع واعتمد'); ok.onclick=()=>reviewDraft(d.id);
+      const no=el('button',{cls:'btn-danger-soft'},'ارفض'); no.onclick=()=>rejectDraft(d.id);
+      act.appendChild(ok); act.appendChild(no); c.appendChild(act);
+    }
+    wrap.appendChild(c);
+  });
+  return wrap;
+}
+
 function renderBalance(){
   const {totalCost,totalRev,totalExp,totalTxExp,net,totalDistributed,inventoryValue}=computed();
   const txExpP=DB.purchases.reduce((s,p)=>s+(p.txExpenses||[]).reduce((a,e)=>a+num(e.amount),0),0);
@@ -4811,10 +5046,11 @@ function render(){
     const active=DB.view===n.id;
     const b=document.createElement('button');b.className=`nav-btn ${active?'active':''}`;
     if(active) b.setAttribute('aria-current','page');
-    b.textContent=n.l;b.onclick=()=>{DB.view=n.id;render();};nav.appendChild(b);
+    const pend = n.id==='drafts' ? (DB.drafts||[]).filter(d=>d.status==='pending').length : 0;
+    b.textContent=n.l+(pend?` (${pend})`:'');b.onclick=()=>{DB.view=n.id;render();};nav.appendChild(b);
   });
   document.getElementById('view-title').textContent=TITLES[DB.view];
-  const views={dashboard:renderDashboard,purchases:renderPurchases,sales:renderSales,inventory:renderInventory,contacts:renderContacts,expenses:renderExpenses,accounts:renderAccounts,pl:renderPL,balance:renderBalance,distribution:renderDistribution,ai:renderAI};
+  const views={dashboard:renderDashboard,purchases:renderPurchases,sales:renderSales,inventory:renderInventory,contacts:renderContacts,expenses:renderExpenses,accounts:renderAccounts,drafts:renderDrafts,pl:renderPL,balance:renderBalance,distribution:renderDistribution,ai:renderAI};
   const content=document.getElementById('content');content.innerHTML='';
   if(views[DB.view])content.appendChild(views[DB.view]());
 }
