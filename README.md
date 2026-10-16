@@ -18,6 +18,7 @@ Open [`plastic_manager.html`](plastic_manager.html) in a browser and it runs.
 | **Balance** (`renderBalance`) | Balance sheet — inventory carried as an asset |
 | **P&L** (`renderPL`) | Profit and loss, COGS derived from AVCO |
 | **Distribution** (`renderDistribution`) | Partner capital and profit distributions |
+| **Review inbox** (`renderDrafts`) | Drafts captured in the field (voice/text) or pasted as JSON wait here; approving opens the normal form pre-filled, with the impact panel, and the save links the record to its draft. Optional link to the drafts service (pull drafts, push name lists, play recordings, mirror decisions) |
 | **Partner funding** (card in `renderBalance`) | Temporary liquidity a partner lends the till (`partnerFunding`, kind `in`/`out`) — a liability, not capital; repayment is capped at what the partner is owed |
 | **Contacts** (`renderContacts`) | Suppliers and customers |
 
@@ -34,6 +35,14 @@ load one through the app's import control; the app treats them read-only until y
 explicitly save.
 
 To start from nothing, just open the app — it begins with an empty ledger.
+
+## Field capture (optional)
+
+[`drafts-service/`](drafts-service/README.md) is a small Node service (Render + Neon) that serves a
+mobile capture page: a person in the field records a transaction by voice or text, Gemini turns it
+into a structured draft and asks for what is missing, and the draft waits for review. The owner's
+local app pulls pending drafts into **صندوق المراجعة**. The service holds drafts and name lists only —
+never the ledger.
 
 ## Running it
 

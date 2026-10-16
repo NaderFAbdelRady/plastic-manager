@@ -3074,9 +3074,10 @@ function saveModal(){
     return;
   }
   if(DB.modal==='draftReject'){
-    DB.drafts=DB.drafts.map(d=>d.id===f._draftId?{...d,status:'rejected',review:{at:new Date().toISOString(),note:(f.note||'').trim()}}:d);
+    DB.drafts=DB.drafts.map(d=>d.id===f._draftId?{...d,status:'rejected',review:{at:new Date().toISOString(),note:(f.note||'').trim()},synced:false}:d);
     markDirty(); closeModal(); render();
     showToast('✓ المسودة اترفضت واتحفظ السبب');
+    dsSyncOne(f._draftId);
     return;
   }
   if(['purchase','sale','expense','collection','supplierPay','traderAdv','workerLiq','partnerFund','distribution'].includes(DB.modal)){
@@ -3088,8 +3089,9 @@ function saveModal(){
       if(rec){
         rec.draftId=f._draftId;
         const {id:_omit,...final}=rec;
-        DB.drafts=DB.drafts.map(d=>d.id===f._draftId?{...d,status:'approved',review:{at:new Date().toISOString(),note:''},ledgerList:list,ledgerId:rec.id,final}:d);
+        DB.drafts=DB.drafts.map(d=>d.id===f._draftId?{...d,status:'approved',review:{at:new Date().toISOString(),note:''},ledgerList:list,ledgerId:rec.id,final,synced:false}:d);
         showToast('✓ المسودة اتعتمدت واتسجلت في الدفاتر');
+        dsSyncOne(f._draftId);
       }
     }
   }
@@ -4059,6 +4061,73 @@ const DRAFT_TYPES={
   collection: {label:'تحصيل من عميل',list:'collections',     party:'customer'},
   supplierPay:{label:'دفعة لمورد',  list:'supplierPayments', party:'supplier'},
 };
+// ── Drafts service link (optional) ────────────────────────────────────────────
+// The service holds field drafts only. The URL + owner token live in localStorage on this device,
+// exactly like the AI keys — they are never written into the ledger file.
+const DRAFTS_LS='pm_drafts_service';
+const DS={url:'',token:'',lastSync:'',busy:false};
+function dsLoad(){ try{ const j=JSON.parse(localStorage.getItem(DRAFTS_LS)||'{}'); if(j&&typeof j==='object'){ DS.url=String(j.url||''); DS.token=String(j.token||''); DS.lastSync=String(j.lastSync||''); } }catch(e){} }
+function dsSave(){ try{ localStorage.setItem(DRAFTS_LS,JSON.stringify({url:DS.url,token:DS.token,lastSync:DS.lastSync})); }catch(e){} }
+const dsReady=()=>!!(DS.url&&DS.token);
+async function dsFetch(path,opts={}){
+  const r=await fetch(DS.url.replace(/\/+$/,'')+path,{...opts,headers:{'Content-Type':'application/json','Authorization':'Bearer '+DS.token,...(opts.headers||{})}});
+  if(opts.raw) { if(!r.ok) throw new Error('HTTP '+r.status); return r; }
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+  return j;
+}
+// Pull pending drafts into the inbox. remoteId keeps the two sides matched, so pulling twice never duplicates.
+async function dsPull(){
+  if(!dsReady()){ showToast('⚠ اكتب رابط الخدمة ورمز المالك الأول'); return; }
+  if(DS.busy) return; DS.busy=true; render();
+  try{
+    const rows=await dsFetch('/api/owner/drafts?status=pending');
+    const have=new Set(DB.drafts.map(d=>d.remoteId).filter(Boolean));
+    let n=0;
+    rows.forEach(d=>{
+      const rid=String(d.id); if(have.has(rid)) return;
+      DB.drafts=[...DB.drafts,{id:uid(),remoteId:rid,createdAt:d.createdAt,receivedAt:new Date().toISOString(),submittedBy:d.submittedBy||'',
+        transcript:d.transcript||'',type:DRAFT_TYPES[d.type]?d.type:'purchase',fields:d.fields||{},conversation:Array.isArray(d.conversation)?d.conversation:[],
+        source:d.source||'text',hasAudio:!!d.hasAudio,audioSeconds:d.audioSeconds||null,status:'pending',review:null,ledgerList:null,ledgerId:null,final:null,synced:true}];
+      n++;
+    });
+    DS.lastSync=new Date().toISOString(); dsSave();
+    if(n) markDirty();
+    showToast(n?`✓ وصلت ${n} ${n===1?'مسودة جديدة':'مسودات جديدة'}`:'لا جديد — الصندوق على الخدمة فاضي');
+  }catch(e){ showToast('✗ ما قدرتش أوصل للخدمة: '+e.message); }
+  finally{ DS.busy=false; render(); }
+}
+// Names only (no money) so the capture page can match what people say to real records.
+async function dsPushReference(){
+  if(!dsReady()){ showToast('⚠ اكتب رابط الخدمة ورمز المالك الأول'); return; }
+  try{
+    await dsFetch('/api/owner/reference',{method:'PUT',body:JSON.stringify({suppliers:DB.suppliers.map(x=>x.name),customers:DB.customers.map(x=>x.name),materials:DB.materials,expenseCats:EXP_CATS})});
+    showToast(`✓ اترفعت قائمة الأسماء: ${DB.suppliers.length} مورد · ${DB.customers.length} عميل · ${DB.materials.length} خامة`);
+  }catch(e){ showToast('✗ ما اترفعتش: '+e.message); }
+}
+// Tell the service what the reviewer decided. Local books are already updated; this only mirrors the status.
+async function dsSyncOne(localId,quiet){
+  const d=DB.drafts.find(x=>x.id===localId);
+  if(!d||!d.remoteId||d.status==='pending'||d.synced||!dsReady()) return false;
+  try{
+    await dsFetch('/api/owner/drafts/'+encodeURIComponent(d.remoteId),{method:'PATCH',body:JSON.stringify({status:d.status,review:d.review,final:d.final,ledgerId:d.ledgerId,ledgerList:d.ledgerList})});
+    DB.drafts=DB.drafts.map(x=>x.id===localId?{...x,synced:true}:x); markDirty(); render();
+    return true;
+  }catch(e){ if(!quiet) showToast('⚠ القرار اتحفظ محلياً بس ما وصلش للخدمة — اضغط "مزامنة القرارات" بعدين'); return false; }
+}
+async function dsSyncAll(){
+  const todo=DB.drafts.filter(d=>d.remoteId&&d.status!=='pending'&&!d.synced);
+  let ok=0; for(const d of todo){ if(await dsSyncOne(d.id,true)) ok++; }
+  showToast(todo.length?`✓ اتزامن ${ok} من ${todo.length}`:'مفيش قرارات مستنية المزامنة');
+}
+async function dsPlayAudio(d,btn){
+  try{
+    btn.disabled=true; btn.textContent='بيحمّل…';
+    const r=await dsFetch('/api/owner/drafts/'+encodeURIComponent(d.remoteId)+'/audio',{raw:true});
+    const blob=await r.blob(); const a=document.createElement('audio'); a.controls=true; a.autoplay=true; a.style.cssText='width:100%;margin-top:8px'; a.src=URL.createObjectURL(blob);
+    btn.replaceWith(a);
+  }catch(e){ btn.disabled=false; btn.textContent='▶ اسمع التسجيل'; showToast('✗ ما قدرتش أجيب التسجيل: '+e.message); }
+}
 const DRAFT_SAMPLE=[
   {type:'purchase',submittedBy:'عز',transcript:'اشتريت من هاني عيسي ٢٠٧٠ كيلو ABS بـ ٢٧ ودفعت له ٣٠ ألف والباقي آجل، النقل ألف جنيه، البضاعة في مخزن ٤',
    fields:{date:today(),party:'هاني عيسي',material:'ABS',qty:2070,unit:'كيلوجرام',price:27,paid:30000,txExpenses:[{desc:'نقل',amount:1000}],location:'مخزن 4'},
@@ -4148,6 +4217,29 @@ function renderDrafts(){
   const pasteBtn=el('button',{cls:'btn-primary',style:'font-size:12px;padding:6px 14px'},'📥 لصق مسودة');
   pasteBtn.onclick=()=>openModal('draftPaste');
   head.appendChild(pasteBtn); wrap.appendChild(head);
+  // ─ service link card
+  const det=document.createElement('details'); det.style.cssText='margin-bottom:14px;border:1px solid var(--border);border-radius:var(--r-sm);padding:10px 14px;background:var(--surface-2)';
+  if(!dsReady()) det.open=true;
+  const sm=document.createElement('summary'); sm.style.cssText='cursor:pointer;font-weight:600;font-size:13px';
+  const unsynced=all.filter(d=>d.remoteId&&d.status!=='pending'&&!d.synced).length;
+  sm.innerHTML=`🔗 ربط خدمة المسودات ${dsReady()?'<span class="badge badge-success">متصل</span>':'<span class="badge badge-warning">غير مضبوط</span>'}${unsynced?` <span class="badge badge-warning">${unsynced} قرار مستني المزامنة</span>`:''}`;
+  det.appendChild(sm);
+  const grid=el('div',{style:'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px'});
+  const urlI=document.createElement('input'); urlI.type='url'; urlI.placeholder='https://plastic-drafts.onrender.com'; urlI.value=DS.url; urlI.setAttribute('aria-label','رابط الخدمة');
+  const tokI=document.createElement('input'); tokI.type='password'; tokI.placeholder='رمز المالك (OWNER_TOKEN)'; tokI.value=DS.token; tokI.setAttribute('aria-label','رمز المالك');
+  [urlI,tokI].forEach(i=>{ i.style.cssText='background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;padding:8px 10px;color:var(--ink);font:inherit;font-size:13px;outline:none'; i.dir='ltr'; });
+  grid.appendChild(urlI); grid.appendChild(tokI); det.appendChild(grid);
+  const btns=el('div',{style:'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center'});
+  const saveB=el('button',{cls:'btn-ghost',style:'font-size:12px;padding:6px 12px'},'حفظ الربط');
+  saveB.onclick=()=>{ DS.url=urlI.value.trim(); DS.token=tokI.value.trim(); dsSave(); render(); showToast(dsReady()?'✓ اتحفظ الربط على الجهاز ده':'⚠ الرابط والرمز مطلوبين'); };
+  const pullB=el('button',{cls:'btn-primary',style:'font-size:12px;padding:6px 12px'},DS.busy?'بيجيب…':'⬇ جلب المسودات الجديدة'); pullB.disabled=DS.busy; pullB.onclick=dsPull;
+  const refB=el('button',{cls:'btn-ghost',style:'font-size:12px;padding:6px 12px'},'⬆ رفع قائمة الأسماء للميدان'); refB.onclick=dsPushReference;
+  const syncB=el('button',{cls:'btn-ghost',style:'font-size:12px;padding:6px 12px'},`↻ مزامنة القرارات${unsynced?` (${unsynced})`:''}`); syncB.onclick=dsSyncAll;
+  [saveB,pullB,refB,syncB].forEach(b=>btns.appendChild(b));
+  if(DS.lastSync) btns.appendChild(el('span',{style:'font-size:11px;color:var(--faint)'},`آخر جلب: ${_draftWhen({createdAt:DS.lastSync})}`));
+  det.appendChild(btns);
+  det.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:8px;line-height:1.7'},'الرابط والرمز بيتحفظوا على الجهاز ده بس، مش في ملف البيانات. الخدمة بتشوف المسودات والأسماء فقط — الدفاتر ما بتطلعش منها أبداً.'));
+  wrap.appendChild(det);
   const filters=el('div',{cls:'draft-filters'});
   [['pending',`معلّق (${counts.pending})`],['approved',`معتمد (${counts.approved})`],['rejected',`مرفوض (${counts.rejected})`],['all',`الكل (${all.length})`]].forEach(([k,l])=>{
     const b=el('button',{cls:`pl-chip${DB.draftsTab===k?' on':''}`},l); b.onclick=()=>{DB.draftsTab=k;render();}; filters.appendChild(b);
@@ -4181,6 +4273,11 @@ function renderDrafts(){
       c.appendChild(el('div',{style:'font-size:12px;color:var(--pos);margin-top:6px'},`✓ اتسجلت في الدفاتر (${esc(t.label)} ${esc(lbl)}) · ${esc(_draftWhen({createdAt:d.review?.at}))}`));
     }
     if(d.status==='rejected') c.appendChild(el('div',{style:'font-size:12px;color:var(--neg);margin-top:6px'},`✗ مرفوضة: ${esc(d.review?.note||'')} · ${esc(_draftWhen({createdAt:d.review?.at}))}`));
+    if(d.hasAudio && d.remoteId && dsReady()){
+      const pb=el('button',{cls:'btn-ghost',style:'font-size:12px;padding:5px 12px;margin-top:4px'},`▶ اسمع التسجيل${d.audioSeconds?` (${Math.round(d.audioSeconds)} ث)`:''}`);
+      pb.onclick=()=>dsPlayAudio(d,pb); c.appendChild(pb);
+    }
+    if(d.remoteId && d.status!=='pending') c.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:4px'},d.synced?'☁ القرار متزامن مع الخدمة':'☁ القرار لسه ما وصلش للخدمة'));
     if(d.status==='pending'){
       const act=el('div',{cls:'draft-actions'});
       const ok=el('button',{cls:'btn-primary',style:'font-size:12.5px;padding:7px 16px'},'راجع واعتمد'); ok.onclick=()=>reviewDraft(d.id);
@@ -5076,6 +5173,7 @@ window.addEventListener('error', e=>{ if(e && e.message){ try{ console.error('Un
 window.addEventListener('unhandledrejection', e=>{ try{ console.error('Unhandled rejection:', e.reason); }catch(_){} });
 _applyThemeIcon();                   // sync the light/dark toggle icon with the active theme
 aiLoad();                            // AI provider/key config (localStorage only — never in DB)
+dsLoad();                            // drafts-service link (localStorage only — never in DB)
 render();
 const _hadLocal = restoreLocal();   // restore unsaved work from a previous session first
 updateSaveState();

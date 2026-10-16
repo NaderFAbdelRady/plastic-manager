@@ -4,8 +4,20 @@
     {
       "name": "plastic-manager",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8791"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8791"
+      ],
       "port": 8791
+    },
+    {
+      "name": "drafts-service",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "drafts-service/dev-start.js"
+      ],
+      "port": 8790
     }
   ]
 }

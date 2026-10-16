@@ -1,0 +1,22 @@
+# Render blueprint — "New → Blueprint" and point it at this repo, or create a Web Service by hand
+# with the same settings. The database lives on Neon (free tier does not expire), not on Render.
+services:
+  - type: web
+    name: plastic-drafts
+    runtime: node
+    rootDir: drafts-service
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # paste the Neon connection string in the Render dashboard
+      - key: OWNER_TOKEN
+        generateValue: true  # Render generates a long random secret; copy it into the local app
+      - key: FIELD_CODES
+        sync: false          # e.g.  عز:482913,أحمد:775120
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
