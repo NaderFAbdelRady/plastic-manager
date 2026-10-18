@@ -163,17 +163,38 @@ async function startRec() {
 }
 function stopRec() { clearTimeout(S.timer); $('mic').classList.remove('rec'); $('mic').textContent = '🎤'; $('hint').textContent = 'بفهم…'; if (S.rec && S.rec.state !== 'inactive') S.rec.stop(); }
 // When the AI can't take audio (Grok), the browser turns speech into text itself and we send the text.
+// Chrome's recognizer (Android especially) repeats itself: each result may contain everything said so far, so the same
+// words come back several times. Merge by treating a result that extends / repeats the previous one as the same segment.
+function mergeSpeech(texts) {
+  const segs = [];
+  for (let raw of texts) {
+    const t = String(raw || '').replace(/\s+/g, ' ').trim(); if (!t) continue;
+    const last = segs.length ? segs[segs.length - 1] : '';
+    if (!last) { segs.push(t); continue; }
+    if (t === last || last.startsWith(t)) continue;           // same or an older, shorter version
+    if (t.startsWith(last)) { segs[segs.length - 1] = t; continue; }   // grew: replace
+    if (last.endsWith(t)) continue;                            // already contained at the end
+    // overlap: the tail of what we have equals the head of the new piece
+    let k = Math.min(last.length, t.length); let merged = false;
+    for (; k >= 6; k--) { if (last.slice(-k) === t.slice(0, k)) { segs[segs.length - 1] = last + t.slice(k); merged = true; break; } }
+    if (!merged) segs.push(t);
+  }
+  return segs.join(' ').trim();
+}
 function startListen() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { sys('المتصفح ده ما بيفهمش الصوت — جرّب Chrome أو اكتب الحركة'); return; }
   const r = new SR(); r.lang = 'ar-EG'; r.interimResults = true; r.continuous = true; r.maxAlternatives = 1;
-  let finalText = '', live = null;
-  r.onresult = e => { let interim = ''; finalText = ''; for (let i = 0; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) finalText += t + ' '; else interim += t; }
-    if (!live) live = add('me', ''); live.innerHTML = '🎤 ' + esc((finalText + interim).trim()) + ' …'; };
+  let merged = '', live = null;
+  r.onresult = e => {
+    const texts = []; for (let i = 0; i < e.results.length; i++) texts.push(e.results[i][0].transcript);
+    merged = mergeSpeech(texts);
+    if (!live) live = add('me', ''); live.innerHTML = '🎤 ' + esc(merged) + ' …';
+  };
   r.onerror = e => { if (e.error === 'not-allowed') sys('مفيش إذن للميكروفون — اسمح للصفحة تستخدمه أو اكتب'); else if (e.error !== 'no-speech' && e.error !== 'aborted') sys('ما سمعتش كويس (' + e.error + ') — جرّب تاني أو اكتب'); };
   r.onend = async () => {
     S.listening = false; $('mic').classList.remove('rec'); $('mic').textContent = '🎤';
-    const t = (finalText || (live ? live.textContent.replace(/^🎤\s*|\s*…$/g, '') : '')).trim();
+    const t = merged.trim();
     if (!t) { if (live) live.remove(); idle(); return; }
     live.innerHTML = '🎤 ' + esc(t); await converse({ text: t }, live, null);
   };
