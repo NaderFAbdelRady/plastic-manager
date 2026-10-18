@@ -122,6 +122,10 @@ function tts(text) {
 $('speak').onclick = () => { S.speak = !S.speak; localStorage.setItem('pm_speak', S.speak ? '1' : '0'); $('speak').textContent = S.speak ? '🔊' : '🔇'; if (!S.speak && window.speechSynthesis) speechSynthesis.cancel(); };
 
 // ── login ──
+async function refreshMode() {   // the owner may switch the AI model while this page is open
+  try { const j = await api('/api/field/login', { method: 'POST', body: JSON.stringify({ code: S.code }) }); S.ai = !!j.ai; S.audioInput = j.audioInput !== false; } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.code && S.name) refreshMode(); });
 async function login(code) {
   const j = await api('/api/field/login', { method: 'POST', body: JSON.stringify({ code }) });
   S.code = code; S.name = j.name; S.ai = !!j.ai; S.audioInput = j.audioInput !== false; S.scopes = j.scopes || []; S.asOf = j.asOf || ''; sessionStorage.setItem('pm_field_code', code);
@@ -224,7 +228,11 @@ async function converse(payload, bubble, voice) {
     if (voice) bubble.innerHTML = '🎤 ' + esc(heard);
     S.conversation.push({ role: 'user', text: heard });
     handle(r, heard, voice);
-  } catch (e) { if (voice) bubble.remove(); add('err', esc('ما قدرتش أفهم: ' + e.message)); }
+  } catch (e) {
+    if (voice) bubble.remove();
+    if (/نص بس/.test(e.message)) { await refreshMode(); say('نظام الفهم اتغيّر. اضغط الميكروفون وقول تاني.', 'bot ask', false); }
+    else add('err', esc('ما قدرتش أفهم: ' + e.message));
+  }
   finally { idle(); }
 }
 function handle(r, heard, voice) {

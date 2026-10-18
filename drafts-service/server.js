@@ -349,7 +349,7 @@ async function geminiConverse({ text, audio, mime, conversation, ctx }) {
   const turns = (conversation || []).slice(-12).map(m => ({ role: m.role, text: String(m.text || '').trim() })).filter(t => t.text);
   let raw;
   if (PROVIDER !== 'gemini') {
-    if (audio) throw new Error(providerLabel() + ' مش بيستقبل صوت — الصفحة المفروض تبعت نص');
+    if (audio) { const e = new Error('نظام الفهم اتغيّر وبقى بياخد نص بس — جدّدت الصفحة، اضغط الميكروفون وقول تاني'); e.needText = true; throw e; }
     if (!text) throw new Error('مفيش صوت ولا نص');
     const system = conversePrompt(ctx) + '\n\nرجّع JSON فقط (من غير أي كلام تاني) بالشكل ده:\n' + JSON.stringify(jsonSchemaOf(CONVERSE_SCHEMA));
     raw = await textCall({ system, turns: [...turns, { role: 'user', text: String(text) }], json: true });
@@ -456,7 +456,7 @@ function ownerAuth(req, res, next) {
   if (!OWNER_TOKEN || !safeEq(t, OWNER_TOKEN)) return res.status(401).json({ error: 'رمز المالك غلط' });
   next();
 }
-const wrap = fn => (req, res) => fn(req, res).catch(e => { console.error(e); res.status(500).json({ error: e.message || 'خطأ' }); });
+const wrap = fn => (req, res) => fn(req, res).catch(e => { if (!e.needText) console.error(e); res.status(e.needText ? 409 : 500).json({ error: e.message || 'خطأ', ...(e.needText ? { needText: true } : {}) }); });
 const b64ToBuf = (s, max) => {
   if (!s) return null;
   const buf = Buffer.from(String(s).replace(/^data:[^;]+;base64,/, ''), 'base64');
