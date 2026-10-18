@@ -4065,9 +4065,9 @@ const DRAFT_TYPES={
 // The service holds field drafts only. The URL + owner token live in localStorage on this device,
 // exactly like the AI keys — they are never written into the ledger file.
 const DRAFTS_LS='pm_drafts_service';
-const DS={url:'',token:'',lastSync:'',busy:false,autoPush:true,autoPull:true,lastSnapshot:''};
-function dsLoad(){ try{ const j=JSON.parse(localStorage.getItem(DRAFTS_LS)||'{}'); if(j&&typeof j==='object'){ DS.url=String(j.url||''); DS.token=String(j.token||''); DS.lastSync=String(j.lastSync||''); DS.autoPush=j.autoPush!==false; DS.autoPull=j.autoPull!==false; DS.lastSnapshot=String(j.lastSnapshot||''); } }catch(e){} }
-function dsSave(){ try{ localStorage.setItem(DRAFTS_LS,JSON.stringify({url:DS.url,token:DS.token,lastSync:DS.lastSync,autoPush:DS.autoPush,autoPull:DS.autoPull,lastSnapshot:DS.lastSnapshot})); }catch(e){} }
+const DS={url:'',token:'',lastSync:'',busy:false,autoPush:true,autoPull:true,shareFinance:false,lastSnapshot:''};
+function dsLoad(){ try{ const j=JSON.parse(localStorage.getItem(DRAFTS_LS)||'{}'); if(j&&typeof j==='object'){ DS.url=String(j.url||''); DS.token=String(j.token||''); DS.lastSync=String(j.lastSync||''); DS.autoPush=j.autoPush!==false; DS.autoPull=j.autoPull!==false; DS.shareFinance=j.shareFinance===true; DS.lastSnapshot=String(j.lastSnapshot||''); } }catch(e){} }
+function dsSave(){ try{ localStorage.setItem(DRAFTS_LS,JSON.stringify({url:DS.url,token:DS.token,lastSync:DS.lastSync,autoPush:DS.autoPush,autoPull:DS.autoPull,shareFinance:DS.shareFinance,lastSnapshot:DS.lastSnapshot})); }catch(e){} }
 const dsReady=()=>!!(DS.url&&DS.token);
 async function dsFetch(path,opts={}){
   const r=await fetch(DS.url.replace(/\/+$/,'')+path,{...opts,headers:{'Content-Type':'application/json','Authorization':'Bearer '+DS.token,...(opts.headers||{})}});
@@ -4118,14 +4118,30 @@ function buildFieldSnapshot(){
     suppliers:DB.suppliers.map(s=>({name:s.name,balance:money2(buildSupplierStatement(s).balance),linked:linkedCustomer(s)?.name||''})), // + = we owe him
   };
   const inventory=computed().invRows.filter(r=>r.stock>0).map(r=>({material:r.m,stock:fq(r.stock),unit:r.unit}));
-  return {deals,money,expenses,balances,inventory};
+  const snap={deals,money,expenses,balances,inventory};
+  if(DS.shareFinance) snap.finance=buildFinanceBlock();   // opt-in: cash, profit, partners, P&L — only for people the owner grants "finance"
+  return snap;
+}
+// The finances, computed with the app's own accounting so the assistant quotes exactly what the screens show.
+function buildFinanceBlock(){
+  const c=computed(), k=computedCash(), m2=v=>Math.round(num(v)*100)/100;
+  const months=[...new Set([...DB.sales,...DB.purchases,...DB.expenses].map(r=>String(r.date||'').slice(0,7)).filter(m=>/^\d{4}-\d{2}$/.test(m)))].sort().slice(-12);
+  const pl=months.map(m=>{ const [y,mm]=m.split('-'); const last=new Date(+y,+mm,0).getDate(); const r=computedPL(m+'-01',`${m}-${String(last).padStart(2,'0')}`);
+    return {month:m,revenue:m2(r.totalRev),cogs:m2(r.cogs),gross:m2(r.gross),expenses:m2(r.totalExp+r.totalTxExp),net:m2(r.net)}; });
+  return {
+    cash:{balance:m2(k.cashBalance),components:{cashIn:k.cashIn,collections:k.collIn,boughtCash:k.cashOutBuy,paidToSuppliers:k.suppPaid,expenses:k.cashOutExp,partnerDraws:k.partnerDrawsRaw,distributionPaid:k.distCashPaid,partnerFundingIn:k.fundIn,partnerFundingOut:k.fundOut}},
+    profit:{netProfit:m2(c.net),totalRevenue:m2(c.totalRev),cogs:m2(c.cogs),gross:m2(c.gross),expenses:m2(c.totalExp+c.totalTxExp),distributed:m2(c.totalDistributed),availableProfit:m2(c.net-c.totalDistributed)},
+    receivable:m2(k.receivable),payable:m2(k.payable),inventoryValue:m2(k.invValue),partnerLoans:m2(k.partnerLoans),capital:m2(DB.capital),equity:m2(k.equity),
+    partners:DB.partners.map(p=>({name:p.name,sharePct:num(p.sharePct),draws:m2(partnerDraws(p.id)),loan:m2(partnerLoanBalance(p.id))})),
+    pl, closings:DB.closings.map(x=>({date:x.date,net:m2(x.net),cash:m2(x.cash)}))
+  };
 }
 async function dsPushSnapshot(quiet){
   if(!dsReady()){ if(!quiet) showToast('⚠ اكتب رابط الخدمة ورمز المالك الأول'); return false; }
   try{
     const r=await dsFetch('/api/owner/snapshot',{method:'PUT',body:JSON.stringify(buildFieldSnapshot())});
     DS.lastSnapshot=new Date().toISOString(); dsSave();
-    if(!quiet) showToast(`✓ اترفعت لقطة للميدان: ${r.deals} صفقة · ${r.money} تحصيل/دفعة · ${r.expenses} مصروف · ${r.inventory} خامة`);
+    if(!quiet) showToast(`✓ اترفعت لقطة للميدان: ${r.deals} صفقة · ${r.money} تحصيل/دفعة · ${r.expenses} مصروف · ${r.inventory} خامة${r.finance?' · + الماليات':''}`);
     if(DB.view==='drafts') render();
     return true;
   }catch(e){ if(!quiet) showToast('✗ اللقطة ما اترفعتش: '+e.message); return false; }
@@ -4166,6 +4182,20 @@ async function dsTestAi(){
     const r=await dsFetch('/api/owner/ai/test',{method:'POST',body:'{}'});
     showToast(r.ok?`✓ ${AI_LABEL[r.provider]} (${r.model}) رد في ${r.ms}ms: ${r.reply}`:`✗ ${AI_LABEL[r.provider]}: ${r.error}`);
   }catch(e){ showToast('✗ ما قدرتش أوصل للخدمة: '+e.message); }
+}
+// Per-person permissions for the field assistant (which groups of data each code may ask about).
+const SCOPE_LABEL={deals:'الصفقات',money:'الفلوس (تحصيلات ودفعات وأرصدة)',expenses:'المصروفات',inventory:'المخزون',finance:'الماليات (الخزنة والأرباح والشركاء والتوزيع)'};
+async function dsLoadScopes(){
+  if(!dsReady()) return;
+  try{ DS.scopes=await dsFetch('/api/owner/scopes'); }catch(e){ DS.scopes={error:e.message}; }
+  if(DB.view==='drafts' && !DB.modal) render();
+}
+async function dsSaveScopes(){
+  try{
+    const people={}; (DS.scopes.people||[]).forEach(p=>{ people[p.name]=p.scopes; });
+    DS.scopes=await dsFetch('/api/owner/scopes',{method:'PUT',body:JSON.stringify({people})});
+    showToast('✓ اتحفظت الصلاحيات'); render();
+  }catch(e){ showToast('✗ ما اتحفظتش: '+e.message); }
 }
 // Names only (no money) so the capture page can match what people say to real records.
 async function dsPushReference(){
@@ -4318,6 +4348,32 @@ function renderDrafts(){
   const pullC=document.createElement('input'); pullC.type='checkbox'; pullC.checked=DS.autoPull; pullC.onchange=()=>{ DS.autoPull=pullC.checked; dsSave(); if(DS.autoPull&&dsReady()) dsPull(true); };
   pullL.appendChild(pullC); pullL.appendChild(document.createTextNode('اجلب المسودات الجديدة أوتوماتيك كل دقيقة طول ما التطبيق مفتوح'));
   det.appendChild(pullL);
+  const finL=document.createElement('label'); finL.style.cssText=autoL.style.cssText+';color:var(--gold-ink)';
+  const finC=document.createElement('input'); finC.type='checkbox'; finC.checked=DS.shareFinance; finC.onchange=()=>{ DS.shareFinance=finC.checked; dsSave(); showToast(DS.shareFinance?'⚠ الماليات (خزنة وأرباح وشركاء) هتتضاف للقطة وتتبعت للسيرفر':'الماليات اتشالت من اللقطة الجاية'); if(dsReady()) dsPushSnapshot(true); };
+  finL.appendChild(finC); finL.appendChild(document.createTextNode('ضيف الماليات للقطة (الخزنة والأرباح والميزانية والشركاء). هتتخزن على السيرفر، وبتظهر بس للناس اللي تدّيهم صلاحية "الماليات" تحت'));
+  det.appendChild(finL);
+  // ─ per-person permissions
+  if(dsReady()){
+    if(!DS.scopes && !DS._scAsked){ DS._scAsked=true; dsLoadScopes(); }
+    if(DS.scopes && !DS.scopes.error){
+      const sb=el('div',{style:'margin-top:14px;padding-top:12px;border-top:1px solid var(--border)'});
+      sb.appendChild(el('div',{style:'font-size:13px;font-weight:600;margin-bottom:8px'},'🔑 صلاحيات ناس الميدان (يسألوا عن إيه)'));
+      (DS.scopes.people||[]).forEach(pp=>{
+        const row=el('div',{style:'display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:12.5px'});
+        row.appendChild(el('b',{style:'min-width:70px'},esc(pp.name)));
+        (DS.scopes.available||[]).forEach(sc=>{
+          const l=document.createElement('label'); l.style.cssText='display:inline-flex;gap:5px;align-items:center;cursor:pointer';
+          const c=document.createElement('input'); c.type='checkbox'; c.checked=pp.scopes.includes(sc); c.onchange=()=>{ pp.scopes=c.checked?[...new Set([...pp.scopes,sc])]:pp.scopes.filter(x=>x!==sc); };
+          l.appendChild(c); l.appendChild(document.createTextNode(SCOPE_LABEL[sc]||sc)); row.appendChild(l);
+        });
+        sb.appendChild(row);
+      });
+      const sv=el('button',{cls:'btn-primary',style:'font-size:12px;padding:6px 12px;margin-top:8px'},'حفظ الصلاحيات'); sv.onclick=dsSaveScopes; sb.appendChild(sv);
+      if((DS.scopes.people||[]).some(pp=>pp.scopes.includes('finance')) && !DS.shareFinance) sb.appendChild(el('div',{style:'font-size:11.5px;color:var(--neg);margin-top:6px'},'⚠ في حد معاه صلاحية الماليات بس مربع "ضيف الماليات للقطة" مقفول، فمش هيلاقي أرقام.'));
+      sb.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:6px;line-height:1.7'},'اللي ما اتحددلوش صلاحيات بياخدوا كل حاجة ما عدا الماليات. التغيير بيشتغل فوراً.'));
+      det.appendChild(sb);
+    }
+  }
   // ─ AI model settings
   if(dsReady()){
     if(!DS.ai && !DS._aiAsked){ DS._aiAsked=true; dsLoadAi(); }

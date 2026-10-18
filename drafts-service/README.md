@@ -31,8 +31,17 @@ stock — **never** cash, profit, capital, partners or average cost. It refreshe
 Every answer says "حسب آخر تحديث من المكتب: …".
 
 ### Scopes
-`FIELD_SCOPES="أحمد:deals+money"` limits a person to those groups (`deals`, `money`, `expenses`, `inventory`, or `all`).
-A person not listed can ask about everything. Out-of-scope questions are refused and logged.
+Five groups: `deals`, `money` (collections, payments, balances), `expenses`, `inventory`, `finance` (cash, profit, balance
+sheet, distribution, partners, monthly P&L, closings). A person who is not configured gets the first four **but not
+`finance`**: that is granted on purpose. Set it per person from the app (🔑 صلاحيات ناس الميدان), or with
+`FIELD_SCOPES="أحمد:deals+money,المدير:all"` (the app wins). Out-of-scope questions are refused and logged.
+
+### Finance (opt-in)
+Tick "ضيف الماليات للقطة" in the app and the snapshot also carries a `finance` block computed with the app's own accounting
+(cash, net/available profit, receivables, payables, inventory value, equity, partners with draws and funding, monthly P&L,
+closings). It is stored on the service, so it is off by default and only answered for people with the `finance` scope.
+«لو وزعنا مية ألف» is computed by `query-engine.js` exactly as the app does (draws absorbed first) and reports the cash left
+after paying out. The snapshot never includes average cost.
 
 ## Choosing the model (Gemini, Grok or Claude)
 Set it **from the owner's app** (صندوق المراجعة ← ربط الخدمة ← 🧠 نموذج الذكاء الاصطناعي): provider, model, API key and, for
@@ -104,6 +113,7 @@ Neon's free tier keeps the data (unlike Render's free Postgres, which expires af
 | owner | GET | `/api/owner/drafts?status=pending` | list drafts (no audio bytes) |
 | owner | GET | `/api/owner/drafts/:id/audio` | the recording |
 | owner | PATCH | `/api/owner/drafts/:id` | `{status, review, final, ledgerId, ledgerList}` |
+| owner | GET/PUT | `/api/owner/scopes` | per-person scopes |
 | owner | GET/PUT | `/api/owner/ai` | read / change the model settings (keys write-only) |
 | owner | POST | `/api/owner/ai/test` | one tiny call to the configured model |
 | owner | PUT | `/api/owner/reference` | upload the name lists |

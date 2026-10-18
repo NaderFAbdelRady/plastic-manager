@@ -21,7 +21,11 @@ function converse(text, audio, hasPending) {
   if (/اشترينا من هاني.*ABS/.test(t)) return R({ intent: 'query', query: { entity: 'deals', kinds: ['purchase'], party: 'هاني عيسي', material: 'ABS', from: '2026-09-01', to: '2026-09-30', aggregate: 'sum' } });
   if (/اللي حصل/.test(t)) return R({ intent: 'query', query: { entity: 'all', from: '2026-10-13', to: '2026-10-15', aggregate: 'list', sort: 'newest', limit: 8 } });
   if (/مخزون|عندنا .* كام/.test(t)) return R({ intent: 'query', query: { entity: 'inventory' } });
-  if (/الكاش|الخزنة|الربح/.test(t)) return R({ intent: 'query', query: { entity: 'all', aggregate: 'sum' }, reply: '' });
+  if (/توزيع|نوزع|وزعنا/.test(t)) return R({ intent: 'query', query: { entity: 'finance', topic: 'distribution', ...(/مية ألف|100|١٠٠/.test(t) ? { amount: 100000 } : {}) } });
+  if (/الشركاء/.test(t)) return R({ intent: 'query', query: { entity: 'finance', topic: 'partners' } });
+  if (/الميزانية/.test(t)) return R({ intent: 'query', query: { entity: 'finance', topic: 'balance_sheet' } });
+  if (/الكاش|الخزنة|السيولة/.test(t)) return R({ intent: 'query', query: { entity: 'finance', topic: 'cash' } });
+  if (/الربح|الأرباح/.test(t)) return R({ intent: 'query', query: { entity: 'finance', topic: 'profit' } });
   return R({ intent: 'chat', reply: 'أهلاً! قولّي حركة أسجلها أو اسأل عن أي حاجة.' });
 }
 http.createServer((req, res) => {

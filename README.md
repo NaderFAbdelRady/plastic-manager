@@ -45,7 +45,7 @@ local app pulls pending drafts into **صندوق المراجعة**. The service
 never the ledger.
 
 The same page also answers questions («حساب فلكس كام؟»، «إيه اللي حصل امبارح؟») from a snapshot the app uploads
-(deals, payments, expenses, balances, stock — never cash, profit, capital or partners). The person never picks a mode:
+(deals, payments, expenses, balances, stock). Cash, profit, the balance sheet, partners and «لو وزعنا كذا» are answered too, but only if the owner opts in and grants a person the `finance` scope. The person never picks a mode:
 the sentence itself decides whether it is a record or a question.
 
 ## Running it
