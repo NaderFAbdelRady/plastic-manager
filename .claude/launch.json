@@ -15,7 +15,8 @@
       "name": "drafts-service",
       "runtimeExecutable": "node",
       "runtimeArgs": [
-        "drafts-service/dev-start.js"
+        "drafts-service/dev-start.js",
+        "--mock"
       ],
       "port": 8790
     }
