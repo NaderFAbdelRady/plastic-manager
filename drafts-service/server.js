@@ -24,6 +24,14 @@ const PORT              = +process.env.PORT || 8790;
 const OWNER_TOKEN       = process.env.OWNER_TOKEN || '';
 const FIELD_CODES       = parseCodes(process.env.FIELD_CODES || '');
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY || '';
+const XAI_API_KEY       = process.env.XAI_API_KEY || '';
+const XAI_MODEL         = process.env.XAI_MODEL || 'grok-3';
+const XAI_BASE          = (process.env.XAI_BASE || 'https://api.x.ai').replace(/\/+$/, '');   // override only for local tests
+// Which model family answers: AI_PROVIDER=gemini|grok, or whichever key is present. Grok takes text only (no audio
+// input), so with Grok the capture page transcribes speech in the browser and sends text.
+const PROVIDER          = (process.env.AI_PROVIDER || (XAI_API_KEY && !GEMINI_API_KEY ? 'grok' : 'gemini')).toLowerCase() === 'grok' ? 'grok' : 'gemini';
+const AI_ON             = PROVIDER === 'grok' ? !!XAI_API_KEY : !!GEMINI_API_KEY;
+const AUDIO_INPUT       = PROVIDER === 'gemini';
 const GEMINI_MODEL      = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 const GEMINI_BASE       = (process.env.GEMINI_BASE || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '');   // override only for local tests
 const FIELD_SCOPES      = Q.parseScopes(process.env.FIELD_SCOPES || '');   // "عز:deals+money,أحمد:all" — default: everything
@@ -294,20 +302,36 @@ ${pending ? `في مسودة حركة معلّقة قدامه دلوقتي: ${JS
 transcript = النص المنطوق كما قيل بدون تعديل.`;
 }
 
+// JSON Schema (lower-case types) from the Gemini-style schema above — Grok gets it as an instruction, not a hard constraint.
+const jsonSchemaOf = x => Array.isArray(x) ? x.map(jsonSchemaOf) : (x && typeof x === 'object')
+  ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, k === 'type' && typeof v === 'string' ? v.toLowerCase() : jsonSchemaOf(v)])) : x;
+async function grokCall({ system, turns, json, maxTokens = 2048 }) {
+  const messages = [{ role: 'system', content: system }, ...turns.map(t => ({ role: t.role === 'assistant' ? 'assistant' : 'user', content: t.text }))];
+  const body = { model: XAI_MODEL, messages, temperature: 0.2, max_tokens: maxTokens, ...(json ? { response_format: { type: 'json_object' } } : {}) };
+  const r = await fetch(`${XAI_BASE}/v1/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + XAI_API_KEY }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && (j.error.message || j.error)) || (j.code ? String(j.code) : `Grok HTTP ${r.status}`));
+  return String(((((j.choices || [])[0] || {}).message || {}).content) || '').replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+}
 async function geminiConverse({ text, audio, mime, conversation, ctx }) {
-  const contents = [];
-  for (const m of (conversation || []).slice(-12)) {
-    const t = String(m.text || '').trim(); if (!t) continue;
-    contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: t }] });
+  const turns = (conversation || []).slice(-12).map(m => ({ role: m.role, text: String(m.text || '').trim() })).filter(t => t.text);
+  let raw;
+  if (PROVIDER === 'grok') {
+    if (audio) throw new Error('Grok مش بيستقبل صوت — الصفحة المفروض تبعت نص');
+    if (!text) throw new Error('مفيش صوت ولا نص');
+    const system = conversePrompt(ctx) + '\n\nرجّع JSON فقط (من غير أي كلام تاني) بالشكل ده:\n' + JSON.stringify(jsonSchemaOf(CONVERSE_SCHEMA));
+    raw = await grokCall({ system, turns: [...turns, { role: 'user', text: String(text) }], json: true });
+  } else {
+    const contents = turns.map(t => ({ role: t.role === 'assistant' ? 'model' : 'user', parts: [{ text: t.text }] }));
+    const parts = [];
+    if (audio) parts.push({ inlineData: { mimeType: mime || 'audio/wav', data: audio } });
+    if (text) parts.push({ text: String(text) });
+    if (!parts.length) throw new Error('مفيش صوت ولا نص');
+    contents.push({ role: 'user', parts });
+    raw = await geminiCall({ systemInstruction: { parts: [{ text: conversePrompt(ctx) }] }, contents,
+      generationConfig: { temperature: 0.2, responseMimeType: 'application/json', responseSchema: CONVERSE_SCHEMA, maxOutputTokens: 2048 } });
   }
-  const parts = [];
-  if (audio) parts.push({ inlineData: { mimeType: mime || 'audio/wav', data: audio } });
-  if (text) parts.push({ text: String(text) });
-  if (!parts.length) throw new Error('مفيش صوت ولا نص');
-  contents.push({ role: 'user', parts });
-  const j = await geminiCall({ systemInstruction: { parts: [{ text: conversePrompt(ctx) }] }, contents,
-    generationConfig: { temperature: 0.2, responseMimeType: 'application/json', responseSchema: CONVERSE_SCHEMA, maxOutputTokens: 2048 } });
-  let out; try { out = JSON.parse(j); } catch (e) { throw new Error('رد النموذج مش JSON'); }
+  let out; try { out = JSON.parse(raw); } catch (e) { const m = raw.match(/\{[\s\S]*\}/); try { out = JSON.parse(m && m[0]); } catch (e2) { throw new Error('رد النموذج مش JSON'); } }
   if (!['record', 'query', 'both', 'confirm', 'cancel', 'clarify', 'chat'].includes(out.intent)) out.intent = 'clarify';
   return out;
 }
@@ -321,14 +345,14 @@ async function geminiCall(body) {
 // Phrase the already-computed result. The model may only restate these numbers; if it fails we use a template.
 async function phraseAnswer(question, query, result, asOf) {
   const fallback = Q.fallbackAnswer(result, asOf);
-  if (result.denied || !GEMINI_API_KEY) return fallback;
+  if (result.denied || !AI_ON) return fallback;
   try {
     const compact = { count: result.count, totalAmount: result.totalAmount, totalQty: result.totalQty, rows: (result.rows || []).slice(0, 15), groups: (result.groups || []).slice(0, 10) };
-    const txt = await geminiCall({
-      systemInstruction: { parts: [{ text: 'أنت بترد على موظف ميداني في تجارة بلاستيك بالعامية المصرية في جملتين تلاتة بالكتير. استخدم الأرقام اللي في النتيجة بالحرف ولا تحسب ولا تخمّن أي رقم جديد. لو النتيجة فاضية قول كده. الأرقام بالجنيه. في الآخر اذكر آخر تحديث للبيانات. للأرصدة: customers والرقم موجب = العميل عليه فلوس لنا، suppliers والرقم موجب = إحنا علينا فلوس للمورد، السالب العكس. رد نص عادي من غير markdown.' }] },
-      contents: [{ role: 'user', parts: [{ text: `السؤال: ${question}\nالاستعلام: ${JSON.stringify(query)}\nالنتيجة: ${JSON.stringify(compact)}\nآخر تحديث: ${asOf || 'غير معروف'}` }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 400 },
-    });
+    const sys = 'أنت بترد على موظف ميداني في تجارة بلاستيك بالعامية المصرية في جملتين تلاتة بالكتير. استخدم الأرقام اللي في النتيجة بالحرف ولا تحسب ولا تخمّن أي رقم جديد. لو النتيجة فاضية قول كده. الأرقام بالجنيه. في الآخر اذكر آخر تحديث للبيانات. للأرصدة: customers والرقم موجب = العميل عليه فلوس لنا، suppliers والرقم موجب = إحنا علينا فلوس للمورد، السالب العكس. رد نص عادي من غير markdown.';
+    const usr = `السؤال: ${question}\nالاستعلام: ${JSON.stringify(query)}\nالنتيجة: ${JSON.stringify(compact)}\nآخر تحديث: ${asOf || 'غير معروف'}`;
+    const txt = PROVIDER === 'grok'
+      ? await grokCall({ system: sys, turns: [{ role: 'user', text: usr }], json: false, maxTokens: 400 })
+      : await geminiCall({ systemInstruction: { parts: [{ text: sys }] }, contents: [{ role: 'user', parts: [{ text: usr }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 400 } });
     const a = String(txt || '').trim();
     return a || fallback;
   } catch (e) { return fallback; }
@@ -410,7 +434,7 @@ const b64ToBuf = (s, max) => {
 
 let store;
 
-app.get('/api/health', wrap(async (req, res) => res.json({ ok: true, store: DATABASE_URL ? 'postgres' : 'file', ai: !!GEMINI_API_KEY, fieldUsers: Object.keys(FIELD_CODES).length, snapshot: !!(await store.getSnapshot()) })));
+app.get('/api/health', wrap(async (req, res) => res.json({ ok: true, store: DATABASE_URL ? 'postgres' : 'file', ai: AI_ON, provider: PROVIDER, audioInput: AUDIO_INPUT, fieldUsers: Object.keys(FIELD_CODES).length, snapshot: !!(await store.getSnapshot()) })));
 
 // ── field endpoints ──
 const asOfText = rec => rec && rec.updatedAt ? new Date(rec.updatedAt).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' }) : '';
@@ -419,14 +443,14 @@ app.post('/api/field/login', limit(20), wrap(async (req, res) => {
   const name = Object.keys(FIELD_CODES).find(n => safeEq(FIELD_CODES[n], code));
   if (!name) return res.status(401).json({ error: 'كود الدخول غلط' });
   const snap = await store.getSnapshot();
-  res.json({ name, ai: !!GEMINI_API_KEY, scopes: [...Q.scopeFor(FIELD_SCOPES, name)], snapshotAt: snap ? snap.updatedAt : null, asOf: asOfText(snap) });
+  res.json({ name, ai: AI_ON, audioInput: AUDIO_INPUT, scopes: [...Q.scopeFor(FIELD_SCOPES, name)], snapshotAt: snap ? snap.updatedAt : null, asOf: asOfText(snap) });
 }));
 app.get('/api/field/reference', fieldAuth, wrap(async (req, res) => {
   const ref = (await store.getReference()) || { suppliers: [], customers: [], materials: [], expenseCats: EXPENSE_CATS_DEFAULT };
   res.json(ref);
 }));
 app.post('/api/field/parse', fieldAuth, limit(30), wrap(async (req, res) => {
-  if (!GEMINI_API_KEY) return res.status(503).json({ error: 'الذكاء الاصطناعي مش متفعّل على الخدمة — املأ الحقول يدوياً' });
+  if (!AI_ON || PROVIDER !== 'gemini') return res.status(503).json({ error: 'الذكاء الاصطناعي مش متفعّل على الخدمة — املأ الحقول يدوياً' });
   const { text, audio, mime, conversation } = req.body || {};
   const audioB64 = audio ? b64ToBuf(audio, MAX_PARSE_AUDIO).toString('base64') : null;
   const reference = await store.getReference();
@@ -435,7 +459,7 @@ app.post('/api/field/parse', fieldAuth, limit(30), wrap(async (req, res) => {
 }));
 // The single entry point for the capture page: the person just talks; the model decides record / query / confirm / ...
 app.post('/api/field/converse', fieldAuth, limit(40), wrap(async (req, res) => {
-  if (!GEMINI_API_KEY) return res.status(503).json({ error: 'الذكاء الاصطناعي مش متفعّل على الخدمة' });
+  if (!AI_ON) return res.status(503).json({ error: 'الذكاء الاصطناعي مش متفعّل على الخدمة' });
   const { text, audio, mime, conversation, pending, lastQuery } = req.body || {};
   const audioB64 = audio ? b64ToBuf(audio, MAX_PARSE_AUDIO).toString('base64') : null;
   const [reference, snapRec] = await Promise.all([store.getReference(), store.getSnapshot()]);
@@ -527,6 +551,7 @@ app.get('/capture', (req, res) => res.sendFile(path.join(__dirname, 'public', 'c
   await store.init();
   if (!OWNER_TOKEN) console.warn('⚠ OWNER_TOKEN is not set — owner endpoints are disabled');
   if (!Object.keys(FIELD_CODES).length) console.warn('⚠ FIELD_CODES is empty — nobody can log in to the capture page');
-  if (!GEMINI_API_KEY) console.warn('⚠ GEMINI_API_KEY is not set — the capture page falls back to manual entry');
+  if (!AI_ON) console.warn(`⚠ no API key for provider "${PROVIDER}" (${PROVIDER === 'grok' ? 'XAI_API_KEY' : 'GEMINI_API_KEY'}) — the capture page falls back to manual entry`);
+  else console.log(`AI provider: ${PROVIDER} (${PROVIDER === 'grok' ? XAI_MODEL : GEMINI_MODEL}), audio input: ${AUDIO_INPUT}`);
   app.listen(PORT, () => console.log(`drafts service on :${PORT} (${DATABASE_URL ? 'postgres' : 'file store ' + DATA_FILE})`));
 })().catch(e => { console.error('startup failed', e); process.exit(1); });
