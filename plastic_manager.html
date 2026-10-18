@@ -4065,9 +4065,9 @@ const DRAFT_TYPES={
 // The service holds field drafts only. The URL + owner token live in localStorage on this device,
 // exactly like the AI keys — they are never written into the ledger file.
 const DRAFTS_LS='pm_drafts_service';
-const DS={url:'',token:'',lastSync:'',busy:false,autoPush:true,lastSnapshot:''};
-function dsLoad(){ try{ const j=JSON.parse(localStorage.getItem(DRAFTS_LS)||'{}'); if(j&&typeof j==='object'){ DS.url=String(j.url||''); DS.token=String(j.token||''); DS.lastSync=String(j.lastSync||''); DS.autoPush=j.autoPush!==false; DS.lastSnapshot=String(j.lastSnapshot||''); } }catch(e){} }
-function dsSave(){ try{ localStorage.setItem(DRAFTS_LS,JSON.stringify({url:DS.url,token:DS.token,lastSync:DS.lastSync,autoPush:DS.autoPush,lastSnapshot:DS.lastSnapshot})); }catch(e){} }
+const DS={url:'',token:'',lastSync:'',busy:false,autoPush:true,autoPull:true,lastSnapshot:''};
+function dsLoad(){ try{ const j=JSON.parse(localStorage.getItem(DRAFTS_LS)||'{}'); if(j&&typeof j==='object'){ DS.url=String(j.url||''); DS.token=String(j.token||''); DS.lastSync=String(j.lastSync||''); DS.autoPush=j.autoPush!==false; DS.autoPull=j.autoPull!==false; DS.lastSnapshot=String(j.lastSnapshot||''); } }catch(e){} }
+function dsSave(){ try{ localStorage.setItem(DRAFTS_LS,JSON.stringify({url:DS.url,token:DS.token,lastSync:DS.lastSync,autoPush:DS.autoPush,autoPull:DS.autoPull,lastSnapshot:DS.lastSnapshot})); }catch(e){} }
 const dsReady=()=>!!(DS.url&&DS.token);
 async function dsFetch(path,opts={}){
   const r=await fetch(DS.url.replace(/\/+$/,'')+path,{...opts,headers:{'Content-Type':'application/json','Authorization':'Bearer '+DS.token,...(opts.headers||{})}});
@@ -4077,9 +4077,9 @@ async function dsFetch(path,opts={}){
   return j;
 }
 // Pull pending drafts into the inbox. remoteId keeps the two sides matched, so pulling twice never duplicates.
-async function dsPull(){
-  if(!dsReady()){ showToast('⚠ اكتب رابط الخدمة ورمز المالك الأول'); return; }
-  if(DS.busy) return; DS.busy=true; render();
+async function dsPull(quiet){
+  if(!dsReady()){ if(!quiet) showToast('⚠ اكتب رابط الخدمة ورمز المالك الأول'); return; }
+  if(DS.busy) return; DS.busy=true; if(!quiet) render();
   try{
     const rows=await dsFetch('/api/owner/drafts?status=pending');
     const have=new Set(DB.drafts.map(d=>d.remoteId).filter(Boolean));
@@ -4093,9 +4093,14 @@ async function dsPull(){
     });
     DS.lastSync=new Date().toISOString(); dsSave();
     if(n) markDirty();
-    showToast(n?`✓ وصلت ${n} ${n===1?'مسودة جديدة':'مسودات جديدة'}`:'لا جديد — الصندوق على الخدمة فاضي');
-  }catch(e){ showToast('✗ ما قدرتش أوصل للخدمة: '+e.message); }
-  finally{ DS.busy=false; render(); }
+    if(!quiet) showToast(n?`✓ وصلت ${n} ${n===1?'مسودة جديدة':'مسودات جديدة'}`:'لا جديد — الصندوق على الخدمة فاضي');
+    else if(n) showToast(`📥 وصلت ${n} ${n===1?'مسودة جديدة':'مسودات جديدة'} من الميدان`);
+    DS.busy=false;
+    // a background poll must not rebuild the screen under a form that is open or being typed into
+    if(!quiet || (n && !DB.modal && !(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)))) render();
+    else if(n) renderNavOnly();
+  }catch(e){ if(!quiet) showToast('✗ ما قدرتش أوصل للخدمة: '+e.message); }
+  finally{ DS.busy=false; if(!quiet) render(); }
 }
 // ── Field snapshot ────────────────────────────────────────────────────────────
 // What the field is allowed to ask about: every deal, payment, expense, party balance and stock level.
@@ -4129,6 +4134,15 @@ async function dsLoadQueries(){
   if(!dsReady()){ showToast('⚠ اكتب رابط الخدمة ورمز المالك الأول'); return; }
   try{ DB.queryLog=await dsFetch('/api/owner/queries?limit=60'); render(); }
   catch(e){ showToast('✗ ما قدرتش أجيب سجل الأسئلة: '+e.message); }
+}
+// Background polling: while the app is open, look for new field drafts every minute (and when the tab is shown again).
+function renderNavOnly(){ try{ const sel=document.querySelector('.nav-btn.active'); const b=[...document.querySelectorAll('.nav-btn')].find(x=>x.textContent.startsWith('صندوق المراجعة')); if(b){ const pend=DB.drafts.filter(d=>d.status==='pending').length; b.textContent='صندوق المراجعة'+(pend?` (${pend})`:''); } }catch(e){} }
+let _dsTimer=null;
+function dsStartAutoPull(){
+  if(_dsTimer) return;
+  _dsTimer=setInterval(()=>{ if(DS.autoPull && dsReady() && !document.hidden) dsPull(true); },60000);
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden && DS.autoPull && dsReady()) dsPull(true); });
+  if(DS.autoPull && dsReady()) setTimeout(()=>dsPull(true),1500);   // on open
 }
 // Names only (no money) so the capture page can match what people say to real records.
 async function dsPushReference(){
@@ -4277,6 +4291,10 @@ function renderDrafts(){
   const autoC=document.createElement('input'); autoC.type='checkbox'; autoC.checked=DS.autoPush; autoC.onchange=()=>{ DS.autoPush=autoC.checked; dsSave(); };
   autoL.appendChild(autoC); autoL.appendChild(document.createTextNode(`ارفع لقطة للميدان أوتوماتيك كل ما أحفظ الملف${DS.lastSnapshot?' · آخر لقطة: '+_draftWhen({createdAt:DS.lastSnapshot}):''}`));
   det.appendChild(autoL);
+  const pullL=document.createElement('label'); pullL.style.cssText=autoL.style.cssText;
+  const pullC=document.createElement('input'); pullC.type='checkbox'; pullC.checked=DS.autoPull; pullC.onchange=()=>{ DS.autoPull=pullC.checked; dsSave(); if(DS.autoPull&&dsReady()) dsPull(true); };
+  pullL.appendChild(pullC); pullL.appendChild(document.createTextNode('اجلب المسودات الجديدة أوتوماتيك كل دقيقة طول ما التطبيق مفتوح'));
+  det.appendChild(pullL);
   det.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:8px;line-height:1.7'},'اللقطة فيها الصفقات والتحصيلات والدفعات والمصروفات وأرصدة الأطراف والمخزون بأسماءها — من غير الخزنة ولا الأرباح ولا رأس المال ولا الشركاء ولا متوسط التكلفة. الرابط والرمز بيتحفظوا على الجهاز ده بس، مش في ملف البيانات. الخدمة بتشوف المسودات والأسماء فقط — الدفاتر ما بتطلعش منها أبداً.'));
   wrap.appendChild(det);
   if(DB.queryLog){
@@ -5226,6 +5244,7 @@ window.addEventListener('unhandledrejection', e=>{ try{ console.error('Unhandled
 _applyThemeIcon();                   // sync the light/dark toggle icon with the active theme
 aiLoad();                            // AI provider/key config (localStorage only — never in DB)
 dsLoad();                            // drafts-service link (localStorage only — never in DB)
+dsStartAutoPull();                   // poll for new field drafts while the app is open
 render();
 const _hadLocal = restoreLocal();   // restore unsaved work from a previous session first
 updateSaveState();
