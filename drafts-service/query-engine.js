@@ -2,8 +2,10 @@
 // Query engine over the field snapshot. The model only turns a spoken question into a structured query;
 // every number in an answer is computed here, from the snapshot, never by the model.
 
-const SCOPES = ['deals', 'money', 'expenses', 'inventory'];
-const ENTITY_SCOPE = { deals: 'deals', money: 'money', balances: 'money', expenses: 'expenses', inventory: 'inventory' };
+const SCOPES = ['deals', 'money', 'expenses', 'inventory', 'finance'];
+// A person who is not configured gets everything EXCEPT finance (cash, profit, partners): that has to be granted on purpose.
+const DEFAULT_SCOPES = ['deals', 'money', 'expenses', 'inventory'];
+const ENTITY_SCOPE = { deals: 'deals', money: 'money', balances: 'money', expenses: 'expenses', inventory: 'inventory', finance: 'finance' };
 
 const norm = s => String(s == null ? '' : s).trim().replace(/\s+/g, ' ').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/[ً-ْ]/g, '').toLowerCase();
 const nameMatch = (name, q) => { const a = norm(name), b = norm(q); return !!a && !!b && (a === b || a.includes(b) || b.includes(a)); };
@@ -20,7 +22,7 @@ function parseScopes(s) {
   });
   return out;
 }
-const scopeFor = (scopes, name) => scopes[name] || new Set(SCOPES);
+const scopeFor = (scopes, name) => scopes[name] || new Set(DEFAULT_SCOPES);
 
 const KIND_AR = { purchase: 'شراء', sale: 'بيع', collection: 'تحصيل', supplierPay: 'دفعة لمورد', expense: 'مصروف' };
 
@@ -39,10 +41,11 @@ function rowsFor(entity, snap, allowed) {
 function runQuery(q, snap, allowed) {
   q = q || {};
   snap = snap || {};
-  const entity = ['deals', 'money', 'expenses', 'balances', 'inventory', 'all'].includes(q.entity) ? q.entity : 'all';
+  const entity = ['deals', 'money', 'expenses', 'balances', 'inventory', 'finance', 'all'].includes(q.entity) ? q.entity : 'all';
   const need = ENTITY_SCOPE[entity];
   if (need && !allowed.has(need)) return { denied: true, entity };
 
+  if (entity === 'finance') return runFinance(q, snap.finance);
   if (entity === 'inventory') {
     const rows = (snap.inventory || []).filter(r => !q.material || nameMatch(r.material, q.material)).sort((a, b) => b.stock - a.stock);
     return { entity, rows: rows.map(r => ({ material: r.material, stock: r.stock, unit: r.unit })), count: rows.length };
@@ -88,16 +91,58 @@ function runQuery(q, snap, allowed) {
   return { ...base, aggregate: 'list', rows: rows.slice(0, lim).map(r => ({ ...r, kindAr: KIND_AR[r.kind] || r.kind })) };
 }
 
+// Finance answers come from the block the owner's app computed with its own accounting (cash, P&L, partners).
+const r2 = n => Math.round((+n || 0) * 100) / 100;
+function runFinance(q, f) {
+  if (!f) return { entity: 'finance', noFinance: true };
+  const topic = ['cash', 'profit', 'balance_sheet', 'distribution', 'partners', 'pl', 'closings'].includes(q.topic) ? q.topic : 'balance_sheet';
+  const c = f.cash || {}, p = f.profit || {}, partners = f.partners || [];
+  const base = { entity: 'finance', topic };
+  if (topic === 'cash') return { ...base, count: 1, data: { cash: c.balance, ...(c.components || {}) } };
+  if (topic === 'profit') return { ...base, count: 1, data: { ...p } };
+  if (topic === 'balance_sheet') return { ...base, count: 1, data: { cash: c.balance, receivable: f.receivable, inventoryValue: f.inventoryValue, payable: f.payable, partnerLoans: f.partnerLoans, capital: f.capital, equity: f.equity } };
+  if (topic === 'partners') return { ...base, count: partners.length, rows: partners };
+  if (topic === 'closings') return { ...base, count: (f.closings || []).length, rows: (f.closings || []).slice(-12).reverse() };
+  if (topic === 'pl') {
+    const lo = isoDate(q.from) ? q.from.slice(0, 7) : null, hi = isoDate(q.to) ? q.to.slice(0, 7) : null;
+    const rows = (f.pl || []).filter(m => (!lo || m.month >= lo) && (!hi || m.month <= hi));
+    const t = rows.reduce((a, m) => ({ revenue: a.revenue + m.revenue, cogs: a.cogs + m.cogs, gross: a.gross + m.gross, expenses: a.expenses + m.expenses, net: a.net + m.net }), { revenue: 0, cogs: 0, gross: 0, expenses: 0, net: 0 });
+    Object.keys(t).forEach(k => t[k] = r2(t[k]));
+    return { ...base, count: rows.length, rows, data: t };
+  }
+  // distribution: what each partner would get if `amount` were distributed now (draws are absorbed first, like the app does)
+  const amount = hasNum(q.amount) ? +q.amount : (p.availableProfit || 0);
+  const totalPct = partners.reduce((a, x) => a + (+x.sharePct || 0), 0) || 1;
+  const rows = partners.map(x => {
+    const gross = r2(amount * (+x.sharePct || 0) / totalPct), absorbed = r2(Math.min(+x.draws || 0, gross));
+    return { party: x.name, sharePct: x.sharePct, gross, draws: r2(x.draws), absorbed, net: r2(gross - absorbed), draws_left: r2((+x.draws || 0) - absorbed) };
+  });
+  const cashPaid = r2(rows.reduce((a, x) => a + x.net, 0)), cashAfter = r2((c.balance || 0) - cashPaid);
+  return { ...base, count: rows.length, rows, data: { requested: r2(amount), availableProfit: p.availableProfit, cashBefore: c.balance, cashPaidOut: cashPaid, cashAfter, enoughProfit: amount <= (p.availableProfit || 0) + 0.5, cashStaysPositive: cashAfter >= 0 } };
+}
+
 const fmtN = n => Math.round(+n || 0).toLocaleString('en-US');
 function fallbackAnswer(res, asOf) {
   const when = asOf ? ` (حسب آخر تحديث من المكتب: ${asOf})` : '';
   if (res.denied) return 'مش مسموح لك تشوف النوع ده من البيانات.';
+  if (res.entity === 'finance') return financeAnswer(res, when);
   if (res.entity === 'inventory') return res.rows.length ? res.rows.slice(0, 6).map(r => `${r.material}: ${fmtN(r.stock)} ${r.unit || 'كجم'}`).join('، ') + when : 'مفيش مخزون بالاسم ده' + when;
   if (res.entity === 'balances') return res.rows.length ? res.rows.slice(0, 6).map(r => `${r.party}: ${balPhrase(r)}`).join('، ') + when : 'مفيش رصيد مطابق' + when;
   if (!res.count) return 'مفيش حركات مطابقة للسؤال ده' + when;
   if (res.aggregate === 'sum' || res.aggregate === 'count') return `${res.count} حركة، إجمالي ${fmtN(res.totalAmount)} جنيه${res.totalQty ? ` وإجمالي كمية ${fmtN(res.totalQty)}` : ''}${when}`;
   if (res.groups) return res.groups.slice(0, 5).map(g => `${g.key}: ${fmtN(g.amount)} جنيه (${g.count})`).join('، ') + when;
   return `لقيت ${res.count} حركة، دي أحدث ${res.rows.length}${when}`;
+}
+function financeAnswer(res, when) {
+  if (res.noFinance) return 'المكتب لسه ما رفعش الماليات للميدان.' + when;
+  const d = res.data || {};
+  if (res.topic === 'cash') return `الخزنة دلوقتي ${fmtN(d.cash)} جنيه.` + when;
+  if (res.topic === 'profit') return `صافي الربح ${fmtN(d.netProfit)}، اتوزع منه ${fmtN(d.distributed)}، والمتاح للتوزيع ${fmtN(d.availableProfit)} جنيه.` + when;
+  if (res.topic === 'balance_sheet') return `الخزنة ${fmtN(d.cash)}، عند العملاء ${fmtN(d.receivable)}، المخزون ${fmtN(d.inventoryValue)}، علينا للموردين ${fmtN(d.payable)}، وحقوق الملكية ${fmtN(d.equity)} جنيه.` + when;
+  if (res.topic === 'partners') return (res.rows || []).map(x => `${x.name} ${x.sharePct}% (سحوبات ${fmtN(x.draws)}${x.loan ? '، تمويل له ' + fmtN(x.loan) : ''})`).join('، ') + when;
+  if (res.topic === 'closings') return (res.rows || []).slice(0, 3).map(x => `${x.date}: ربح ${fmtN(x.net)}، خزنة ${fmtN(x.cash)}`).join('، ') + when;
+  if (res.topic === 'pl') return `في الفترة دي: مبيعات ${fmtN(d.revenue)}، مصروفات ${fmtN(d.expenses)}، صافي ${fmtN(d.net)} جنيه.` + when;
+  return `لو وزعنا ${fmtN(d.requested)}: ` + (res.rows || []).map(x => `${x.party} يستلم ${fmtN(x.net)}${x.absorbed ? ' (بعد خصم سحوبات ' + fmtN(x.absorbed) + ')' : ''}`).join('، ') + `. الخزنة هتبقى ${fmtN(d.cashAfter)}${d.cashStaysPositive ? '' : ' (بالسالب!)'}.` + (d.enoughProfit ? '' : ' والمبلغ أكبر من المتاح للتوزيع.') + when;
 }
 // balance sign: customers → positive = he owes us; suppliers → positive = we owe him
 function balPhrase(r) {
@@ -106,4 +151,4 @@ function balPhrase(r) {
   if (r.side === 'customers') return v > 0 ? `عليه ${fmtN(v)}` : `ليه علينا ${fmtN(-v)}`;
   return v > 0 ? `ليه علينا ${fmtN(v)}` : `ليه عندنا مقدم ${fmtN(-v)}`;
 }
-module.exports = { SCOPES, parseScopes, scopeFor, runQuery, fallbackAnswer, balPhrase, norm, nameMatch, KIND_AR };
+module.exports = { SCOPES, DEFAULT_SCOPES, parseScopes, scopeFor, runQuery, fallbackAnswer, balPhrase, norm, nameMatch, KIND_AR };

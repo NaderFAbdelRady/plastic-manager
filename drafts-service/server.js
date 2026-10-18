@@ -103,6 +103,8 @@ class PgStore {
       query JSONB, answer TEXT, as_of TEXT, denied BOOLEAN NOT NULL DEFAULT false)`);
   }
   // The office snapshot lives in the same table as the name lists, under id 2.
+  async getScopes() { const r = await this.pool.query(`SELECT data FROM reference WHERE id = 4`); return r.rows[0] ? r.rows[0].data : null; }
+  async setScopes(data) { await this.pool.query(`INSERT INTO reference(id, data, updated_at) VALUES(4, $1, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`, [JSON.stringify(data)]); }
   async getAiSettings() { const r = await this.pool.query(`SELECT data FROM reference WHERE id = 3`); return r.rows[0] ? r.rows[0].data : null; }
   async setAiSettings(data) { await this.pool.query(`INSERT INTO reference(id, data, updated_at) VALUES(3, $1, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`, [JSON.stringify(data)]); }
   async getSnapshot() {
@@ -195,6 +197,8 @@ class FileStore {
   }
   async getReference() { return this.db.reference; }
   async setReference(data) { this.db.reference = { ...data, updatedAt: new Date().toISOString() }; this._save(); }
+  async getScopes() { return this.db.scopes || null; }
+  async setScopes(data) { this.db.scopes = data; this._save(); }
   async getAiSettings() { return this.db.aiSettings || null; }
   async setAiSettings(data) { this.db.aiSettings = data; this._save(); }
   async getSnapshot() { return this.db.snapshot || null; }
@@ -255,7 +259,9 @@ function systemPrompt(ref, fieldName) {
 const QUERY_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    entity: { type: 'STRING', enum: ['deals', 'money', 'expenses', 'balances', 'inventory', 'all'] },
+    entity: { type: 'STRING', enum: ['deals', 'money', 'expenses', 'balances', 'inventory', 'finance', 'all'] },
+    topic: { type: 'STRING', enum: ['cash', 'profit', 'balance_sheet', 'distribution', 'partners', 'pl', 'closings'] },
+    amount: { type: 'NUMBER' },
     kinds: { type: 'ARRAY', items: { type: 'STRING', enum: ['purchase', 'sale', 'collection', 'supplierPay', 'expense'] } },
     party: { type: 'STRING' }, material: { type: 'STRING' }, from: { type: 'STRING' }, to: { type: 'STRING' },
     minAmount: { type: 'NUMBER' }, maxAmount: { type: 'NUMBER' },
@@ -308,6 +314,7 @@ function conversePrompt({ ref, fieldName, allowed, pending, lastQuery, asOf }) {
 - الخامات: ${list(ref && ref.materials)}
 - فئات المصروفات: ${list((ref && ref.expenseCats) || EXPENSE_CATS_DEFAULT)}
 
+للماليات (لو مسموح): entity=finance مع topic: cash (الخزنة/السيولة)، profit (الأرباح وصافي الربح والمتاح للتوزيع)، balance_sheet (الميزانية: خزنة وذمم ومخزون وحقوق ملكية)، distribution (توزيع الأرباح: لو ذكر مبلغ حطه في amount، وإلا هيتحسب على المتاح للتوزيع)، partners (الشركاء ونسبهم وسحوباتهم وتمويلهم)، pl (الأرباح والخسائر بالشهور، مع from/to)، closings (التقفيلات). 
 للـ query: entity = deals للمشتريات والمبيعات، money للتحصيلات ودفعات الموردين، expenses للمصروفات، balances للأرصدة (balanceSide: customers = اللي علينا عندهم، suppliers = اللي لهم علينا)، inventory للمخزون، all لـ"إيه اللي حصل". kinds لو حدد نوع. party/material بالأسماء من القوائم. aggregate: list لقائمة، sum لإجمالي، count لعدد، group_party/group_day/group_material للتجميع. sort: newest افتراضي، largest لـ"أكبر". "حساب فلان" = entity balances و party فلان.
 ${lastQuery ? `آخر سؤال في المحادثة كان: ${JSON.stringify(lastQuery)} — لو الجملة الحالية متابعة ("وجمال؟" "والشهر اللي قبله؟") عدّل عليه بس.` : ''}
 ${pending ? `في مسودة حركة معلّقة قدامه دلوقتي: ${JSON.stringify(pending)}. لو بيصلّح فيها ("لأ خليها آجل") رجّع intent=record بالمسودة كاملة محدّثة. لو بيوافق intent=confirm. لو بيرفض intent=cancel.` : 'مفيش مسودة معلّقة: confirm و cancel مالهمش معنى، استخدم clarify أو chat.'}
@@ -379,7 +386,7 @@ async function phraseAnswer(question, query, result, asOf) {
   const fallback = Q.fallbackAnswer(result, asOf);
   if (result.denied || !AI_ON) return fallback;
   try {
-    const compact = { count: result.count, totalAmount: result.totalAmount, totalQty: result.totalQty, rows: (result.rows || []).slice(0, 15), groups: (result.groups || []).slice(0, 10) };
+    const compact = { count: result.count, totalAmount: result.totalAmount, totalQty: result.totalQty, topic: result.topic, data: result.data, rows: (result.rows || []).slice(0, 15), groups: (result.groups || []).slice(0, 10) };
     const sys = 'أنت بترد على موظف ميداني في تجارة بلاستيك بالعامية المصرية في جملتين تلاتة بالكتير. استخدم الأرقام اللي في النتيجة بالحرف ولا تحسب ولا تخمّن أي رقم جديد. لو النتيجة فاضية قول كده. الأرقام بالجنيه. في الآخر اذكر آخر تحديث للبيانات. للأرصدة: customers والرقم موجب = العميل عليه فلوس لنا، suppliers والرقم موجب = إحنا علينا فلوس للمورد، السالب العكس. رد نص عادي من غير markdown.';
     const usr = `السؤال: ${question}\nالاستعلام: ${JSON.stringify(query)}\nالنتيجة: ${JSON.stringify(compact)}\nآخر تحديث: ${asOf || 'غير معروف'}`;
     const txt = PROVIDER !== 'gemini'
@@ -465,6 +472,8 @@ const b64ToBuf = (s, max) => {
 };
 
 let store;
+let SCOPES_DB = {};   // {name: [scope,...]} set from the owner's app; wins over the FIELD_SCOPES env var
+const scopesOf = name => SCOPES_DB[name] ? new Set(SCOPES_DB[name].filter(x => Q.SCOPES.includes(x))) : Q.scopeFor(FIELD_SCOPES, name);
 
 app.get('/api/health', wrap(async (req, res) => res.json({ ok: true, store: DATABASE_URL ? 'postgres' : 'file', ai: AI_ON, provider: PROVIDER, audioInput: AUDIO_INPUT, fieldUsers: Object.keys(FIELD_CODES).length, snapshot: !!(await store.getSnapshot()) })));
 
@@ -475,7 +484,7 @@ app.post('/api/field/login', limit(20), wrap(async (req, res) => {
   const name = Object.keys(FIELD_CODES).find(n => safeEq(FIELD_CODES[n], code));
   if (!name) return res.status(401).json({ error: 'كود الدخول غلط' });
   const snap = await store.getSnapshot();
-  res.json({ name, ai: AI_ON, audioInput: AUDIO_INPUT, scopes: [...Q.scopeFor(FIELD_SCOPES, name)], snapshotAt: snap ? snap.updatedAt : null, asOf: asOfText(snap) });
+  res.json({ name, ai: AI_ON, audioInput: AUDIO_INPUT, scopes: [...scopesOf(name)], snapshotAt: snap ? snap.updatedAt : null, asOf: asOfText(snap) });
 }));
 app.get('/api/field/reference', fieldAuth, wrap(async (req, res) => {
   const ref = (await store.getReference()) || { suppliers: [], customers: [], materials: [], expenseCats: EXPENSE_CATS_DEFAULT };
@@ -495,7 +504,7 @@ app.post('/api/field/converse', fieldAuth, limit(40), wrap(async (req, res) => {
   const { text, audio, mime, conversation, pending, lastQuery } = req.body || {};
   const audioB64 = audio ? b64ToBuf(audio, MAX_PARSE_AUDIO).toString('base64') : null;
   const [reference, snapRec] = await Promise.all([store.getReference(), store.getSnapshot()]);
-  const allowed = Q.scopeFor(FIELD_SCOPES, req.fieldName), asOf = asOfText(snapRec);
+  const allowed = scopesOf(req.fieldName), asOf = asOfText(snapRec);
   const u = await geminiConverse({ text, audio: audioB64, mime, conversation, ctx: { ref: reference, fieldName: req.fieldName, allowed, pending: pending || null, lastQuery: lastQuery || null, asOf } });
   const out = { kind: u.intent, transcript: String(u.transcript || text || '').trim(), confidence: u.confidence };
   if ((u.intent === 'record' || u.intent === 'both') && u.draft && DRAFT_TYPES.includes(u.draft.type)) {
@@ -516,7 +525,7 @@ app.post('/api/field/converse', fieldAuth, limit(40), wrap(async (req, res) => {
 app.post('/api/field/query', fieldAuth, limit(60), wrap(async (req, res) => {
   const snapRec = await store.getSnapshot();
   if (!snapRec) return res.status(404).json({ error: 'لسه المكتب ما رفعش بيانات للميدان' });
-  const allowed = Q.scopeFor(FIELD_SCOPES, req.fieldName), asOf = asOfText(snapRec);
+  const allowed = scopesOf(req.fieldName), asOf = asOfText(snapRec);
   const result = Q.runQuery((req.body && req.body.query) || {}, snapRec.data, allowed);
   const answer = Q.fallbackAnswer(result, asOf);
   store.logQuery({ askedBy: req.fieldName, intent: 'query', question: String((req.body && req.body.question) || '(استعلام مباشر)'), query: req.body && req.body.query, answer, asOf, denied: !!result.denied }).catch(() => {});
@@ -607,8 +616,25 @@ app.put('/api/owner/snapshot', ownerAuth, wrap(async (req, res) => {
   const arr = x => Array.isArray(x) ? x.filter(r => r && typeof r === 'object').slice(0, 20000) : [];
   const bal = b.balances && typeof b.balances === 'object' ? b.balances : {};
   const data = { deals: arr(b.deals), money: arr(b.money), expenses: arr(b.expenses), inventory: arr(b.inventory), balances: { customers: arr(bal.customers), suppliers: arr(bal.suppliers) } };
+  if (b.finance && typeof b.finance === 'object') {   // optional: only present when the owner chose to share the finances
+    const f = b.finance, n = v => Number.isFinite(+v) ? Math.round(+v * 100) / 100 : 0, obj = o => (o && typeof o === 'object') ? Object.fromEntries(Object.entries(o).map(([k, v]) => [k, n(v)])) : {};
+    data.finance = { cash: { balance: n(f.cash && f.cash.balance), components: obj(f.cash && f.cash.components) }, profit: obj(f.profit),
+      receivable: n(f.receivable), payable: n(f.payable), inventoryValue: n(f.inventoryValue), partnerLoans: n(f.partnerLoans), capital: n(f.capital), equity: n(f.equity),
+      partners: arr(f.partners).map(x => ({ name: String(x.name || ''), sharePct: n(x.sharePct), draws: n(x.draws), loan: n(x.loan) })),
+      pl: arr(f.pl).map(m => ({ month: String(m.month || ''), revenue: n(m.revenue), cogs: n(m.cogs), gross: n(m.gross), expenses: n(m.expenses), net: n(m.net) })),
+      closings: arr(f.closings).map(c => ({ date: String(c.date || ''), net: n(c.net), cash: n(c.cash) })) };
+  }
   await store.setSnapshot(data);
-  res.json({ ok: true, deals: data.deals.length, money: data.money.length, expenses: data.expenses.length, inventory: data.inventory.length });
+  res.json({ ok: true, deals: data.deals.length, money: data.money.length, expenses: data.expenses.length, inventory: data.inventory.length, finance: !!data.finance });
+}));
+app.get('/api/owner/scopes', ownerAuth, wrap(async (req, res) => {
+  res.json({ available: Q.SCOPES, people: Object.keys(FIELD_CODES).map(name => ({ name, scopes: [...scopesOf(name)], fromApp: !!SCOPES_DB[name] })) });
+}));
+app.put('/api/owner/scopes', ownerAuth, wrap(async (req, res) => {
+  const b = (req.body && req.body.people) || {}; const next = { ...SCOPES_DB };
+  Object.keys(b).forEach(name => { if (FIELD_CODES[name] !== undefined && Array.isArray(b[name])) next[name] = b[name].filter(x => Q.SCOPES.includes(x)); });
+  await store.setScopes(next); SCOPES_DB = next;
+  res.json({ available: Q.SCOPES, people: Object.keys(FIELD_CODES).map(name => ({ name, scopes: [...scopesOf(name)], fromApp: !!SCOPES_DB[name] })) });
 }));
 app.get('/api/owner/queries', ownerAuth, wrap(async (req, res) => { res.json(await store.listQueries(Math.min(+req.query.limit || 100, 500))); }));
 app.put('/api/owner/reference', ownerAuth, wrap(async (req, res) => {
@@ -626,6 +652,7 @@ app.get('/capture', (req, res) => res.sendFile(path.join(__dirname, 'public', 'c
   store = DATABASE_URL ? new PgStore(DATABASE_URL) : new FileStore(DATA_FILE);
   await store.init();
   await loadAiFromStore().catch(e => console.error('ai settings', e.message));
+  SCOPES_DB = (await store.getScopes().catch(() => null)) || {};
   if (!OWNER_TOKEN) console.warn('⚠ OWNER_TOKEN is not set — owner endpoints are disabled');
   if (!Object.keys(FIELD_CODES).length) console.warn('⚠ FIELD_CODES is empty — nobody can log in to the capture page');
   if (!AI_ON) console.warn(`⚠ no API key for provider "${PROVIDER}" — set it from the app (🧠 settings) or as an environment variable; the capture page falls back to manual entry`);
