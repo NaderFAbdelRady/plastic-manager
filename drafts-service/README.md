@@ -13,12 +13,34 @@ owner laptop ──► plastic_manager.html ──► "صندوق المراجع
                  approves locally, marks them approved/rejected here
 ```
 
+## One page, one mic
+
+The person opens the page and just talks. Gemini decides what they are doing — recording a transaction, asking a
+question, confirming, cancelling, answering a follow-up, or chatting — so there is no "record" / "ask" switch.
+
+* **Record** → a draft card (editable) appears; it is sent for review only after "ابعت" or a spoken «أيوه».
+  A question can never write anything: at worst it is misread as a draft, which is still just a card.
+* **Ask** → Gemini only turns the sentence into a structured query (entity, party, material, dates, aggregate).
+  `query-engine.js` runs it over the **snapshot** and computes every number; Gemini then only phrases the result.
+* **Unclear** (e.g. «هاني عيسي ٣٠ ألف» — payment or balance?) → one short clarifying question.
+* Answers are shown with their rows and read aloud (browser speech synthesis); every question is logged for the owner.
+
+### The snapshot
+The local app uploads a snapshot (`PUT /api/owner/snapshot`): deals, collections/payments, expenses, party balances and
+stock — **never** cash, profit, capital, partners or average cost. It refreshes on every file save (toggle in the app).
+Every answer says "حسب آخر تحديث من المكتب: …".
+
+### Scopes
+`FIELD_SCOPES="أحمد:deals+money"` limits a person to those groups (`deals`, `money`, `expenses`, `inventory`, or `all`).
+A person not listed can ask about everything. Out-of-scope questions are refused and logged.
+
 ## Run locally (no database, no keys)
 
 ```bash
 cd drafts-service
 npm install
-node dev-start.js            # http://localhost:8790  — field codes: عز:1234, أحمد:5678, owner token: dev-owner-token
+node dev-start.js            # add --mock to also start a scripted Gemini stand-in (test/mock-gemini.js)
+                             # http://localhost:8790  — field codes: عز:1234, أحمد:5678, owner token: dev-owner-token
 ```
 
 Drafts go to `data/drafts.json`. The capture page works without a Gemini key (manual entry);
@@ -38,6 +60,7 @@ set `GEMINI_API_KEY` to enable the voice / free-text understanding.
    | `FIELD_CODES` | `عز:482913,أحمد:775120` — one code per person |
    | `GEMINI_API_KEY` | your Gemini key (server-side only) |
    | `GEMINI_MODEL` | `gemini-2.5-flash` (default) |
+   | `FIELD_SCOPES` | optional, e.g. `أحمد:deals+money` |
 
 4. Open `https://<service>.onrender.com/` on a phone → the capture page. Give each person the URL and their own code.
 5. In the local app → **صندوق المراجعة → ربط خدمة المسودات**: paste the URL and the owner token,
@@ -54,6 +77,8 @@ Neon's free tier keeps the data (unlike Render's free Postgres, which expires af
 | anyone | GET | `/api/health` | liveness, store type, AI on/off |
 | field | POST | `/api/field/login` `{code}` | returns the person's name |
 | field | GET | `/api/field/reference` | names of suppliers / customers / materials / expense categories |
+| field | POST | `/api/field/converse` `{text? audio? mime? conversation? pending? lastQuery?}` | the one entry point: record / query / both / confirm / cancel / clarify / chat |
+| field | POST | `/api/field/query` `{query}` | deterministic query (no AI), same scope checks |
 | field | POST | `/api/field/parse` `{text? audio? mime? conversation?}` | Gemini → structured draft + follow-up question |
 | field | POST | `/api/field/drafts` | submit a draft (+ optional recording, ≤ 2 MB, ≤ 120 s) |
 | field | GET | `/api/field/drafts` | the person's own drafts with status |
@@ -61,6 +86,8 @@ Neon's free tier keeps the data (unlike Render's free Postgres, which expires af
 | owner | GET | `/api/owner/drafts/:id/audio` | the recording |
 | owner | PATCH | `/api/owner/drafts/:id` | `{status, review, final, ledgerId, ledgerList}` |
 | owner | PUT | `/api/owner/reference` | upload the name lists |
+| owner | PUT | `/api/owner/snapshot` | upload the field snapshot (deals, money, expenses, balances, inventory) |
+| owner | GET | `/api/owner/queries` | log of what the field asked and what it was told |
 
 Field requests carry `X-Field-Code: <code>`; owner requests carry `Authorization: Bearer <OWNER_TOKEN>`.
 There is no delete endpoint by design — a draft only ever changes status.

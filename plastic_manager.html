@@ -635,7 +635,7 @@ function persistLocal(){
 // discrete actions, not keystrokes) so nothing is lost even if the tab closes at once.
 function markDirty(){ _dirty = true; updateSaveState(); persistLocal(); }
 // markClean: after a successful export to the JSON file
-function markClean(){ _dirty = false; updateSaveState(); persistLocal(); }
+function markClean(){ _dirty = false; updateSaveState(); persistLocal(); try{ if(typeof dsReady==='function' && DS.autoPush && dsReady()) dsPushSnapshot(true); }catch(e){} }
 function restoreLocal(){
   try {
     const raw = localStorage.getItem(LS_KEY);
@@ -4065,9 +4065,9 @@ const DRAFT_TYPES={
 // The service holds field drafts only. The URL + owner token live in localStorage on this device,
 // exactly like the AI keys — they are never written into the ledger file.
 const DRAFTS_LS='pm_drafts_service';
-const DS={url:'',token:'',lastSync:'',busy:false};
-function dsLoad(){ try{ const j=JSON.parse(localStorage.getItem(DRAFTS_LS)||'{}'); if(j&&typeof j==='object'){ DS.url=String(j.url||''); DS.token=String(j.token||''); DS.lastSync=String(j.lastSync||''); } }catch(e){} }
-function dsSave(){ try{ localStorage.setItem(DRAFTS_LS,JSON.stringify({url:DS.url,token:DS.token,lastSync:DS.lastSync})); }catch(e){} }
+const DS={url:'',token:'',lastSync:'',busy:false,autoPush:true,lastSnapshot:''};
+function dsLoad(){ try{ const j=JSON.parse(localStorage.getItem(DRAFTS_LS)||'{}'); if(j&&typeof j==='object'){ DS.url=String(j.url||''); DS.token=String(j.token||''); DS.lastSync=String(j.lastSync||''); DS.autoPush=j.autoPush!==false; DS.lastSnapshot=String(j.lastSnapshot||''); } }catch(e){} }
+function dsSave(){ try{ localStorage.setItem(DRAFTS_LS,JSON.stringify({url:DS.url,token:DS.token,lastSync:DS.lastSync,autoPush:DS.autoPush,lastSnapshot:DS.lastSnapshot})); }catch(e){} }
 const dsReady=()=>!!(DS.url&&DS.token);
 async function dsFetch(path,opts={}){
   const r=await fetch(DS.url.replace(/\/+$/,'')+path,{...opts,headers:{'Content-Type':'application/json','Authorization':'Bearer '+DS.token,...(opts.headers||{})}});
@@ -4096,6 +4096,39 @@ async function dsPull(){
     showToast(n?`✓ وصلت ${n} ${n===1?'مسودة جديدة':'مسودات جديدة'}`:'لا جديد — الصندوق على الخدمة فاضي');
   }catch(e){ showToast('✗ ما قدرتش أوصل للخدمة: '+e.message); }
   finally{ DS.busy=false; render(); }
+}
+// ── Field snapshot ────────────────────────────────────────────────────────────
+// What the field is allowed to ask about: every deal, payment, expense, party balance and stock level.
+// Deliberately NOT included: cash, profit, capital, partners (draws / funding / shares), average cost.
+function buildFieldSnapshot(){
+  const money2=v=>Math.round(num(v)*100)/100;
+  const deal=(kind,r,party)=>({kind,date:r.date,party,material:r.material,color:r.color||'',qty:fq(r.qty),unit:r.unit||'',price:money2(r.price),
+    net:money2(netAmt(r)),paid:money2(r.paid),remaining:money2(netAmt(r)-num(r.paid)),text:r.color||''});
+  const deals=[...DB.purchases.map(r=>deal('purchase',r,sName(r.supplierId))),...DB.sales.map(r=>deal('sale',r,cName(r.customerId)))];
+  const money=[...DB.collections.map(r=>({kind:'collection',date:r.date,party:cName(r.customerId),amount:money2(r.amount),note:r.note||''})),
+               ...DB.supplierPayments.map(r=>({kind:'supplierPay',date:r.date,party:sName(r.supplierId),amount:money2(r.amount),note:r.note||''}))];
+  const expenses=DB.expenses.map(r=>({date:r.date,cat:r.cat,desc:r.desc||'',amount:money2(r.amount)}));
+  const balances={
+    customers:DB.customers.map(c=>({name:c.name,balance:money2(buildCustomerStatement(c).balance)})),   // + = he owes us
+    suppliers:DB.suppliers.map(s=>({name:s.name,balance:money2(buildSupplierStatement(s).balance),linked:linkedCustomer(s)?.name||''})), // + = we owe him
+  };
+  const inventory=computed().invRows.filter(r=>r.stock>0).map(r=>({material:r.m,stock:fq(r.stock),unit:r.unit}));
+  return {deals,money,expenses,balances,inventory};
+}
+async function dsPushSnapshot(quiet){
+  if(!dsReady()){ if(!quiet) showToast('⚠ اكتب رابط الخدمة ورمز المالك الأول'); return false; }
+  try{
+    const r=await dsFetch('/api/owner/snapshot',{method:'PUT',body:JSON.stringify(buildFieldSnapshot())});
+    DS.lastSnapshot=new Date().toISOString(); dsSave();
+    if(!quiet) showToast(`✓ اترفعت لقطة للميدان: ${r.deals} صفقة · ${r.money} تحصيل/دفعة · ${r.expenses} مصروف · ${r.inventory} خامة`);
+    if(DB.view==='drafts') render();
+    return true;
+  }catch(e){ if(!quiet) showToast('✗ اللقطة ما اترفعتش: '+e.message); return false; }
+}
+async function dsLoadQueries(){
+  if(!dsReady()){ showToast('⚠ اكتب رابط الخدمة ورمز المالك الأول'); return; }
+  try{ DB.queryLog=await dsFetch('/api/owner/queries?limit=60'); render(); }
+  catch(e){ showToast('✗ ما قدرتش أجيب سجل الأسئلة: '+e.message); }
 }
 // Names only (no money) so the capture page can match what people say to real records.
 async function dsPushReference(){
@@ -4235,11 +4268,30 @@ function renderDrafts(){
   const pullB=el('button',{cls:'btn-primary',style:'font-size:12px;padding:6px 12px'},DS.busy?'بيجيب…':'⬇ جلب المسودات الجديدة'); pullB.disabled=DS.busy; pullB.onclick=dsPull;
   const refB=el('button',{cls:'btn-ghost',style:'font-size:12px;padding:6px 12px'},'⬆ رفع قائمة الأسماء للميدان'); refB.onclick=dsPushReference;
   const syncB=el('button',{cls:'btn-ghost',style:'font-size:12px;padding:6px 12px'},`↻ مزامنة القرارات${unsynced?` (${unsynced})`:''}`); syncB.onclick=dsSyncAll;
-  [saveB,pullB,refB,syncB].forEach(b=>btns.appendChild(b));
+  const snapB=el('button',{cls:'btn-ghost',style:'font-size:12px;padding:6px 12px'},'📸 رفع لقطة للميدان'); snapB.onclick=()=>dsPushSnapshot(false);
+  const logB=el('button',{cls:'btn-ghost',style:'font-size:12px;padding:6px 12px'},'🗣 سجل أسئلة الميدان'); logB.onclick=dsLoadQueries;
+  [saveB,pullB,refB,snapB,syncB,logB].forEach(b=>btns.appendChild(b));
   if(DS.lastSync) btns.appendChild(el('span',{style:'font-size:11px;color:var(--faint)'},`آخر جلب: ${_draftWhen({createdAt:DS.lastSync})}`));
   det.appendChild(btns);
-  det.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:8px;line-height:1.7'},'الرابط والرمز بيتحفظوا على الجهاز ده بس، مش في ملف البيانات. الخدمة بتشوف المسودات والأسماء فقط — الدفاتر ما بتطلعش منها أبداً.'));
+  const autoL=document.createElement('label'); autoL.style.cssText='display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12px;color:var(--muted);cursor:pointer';
+  const autoC=document.createElement('input'); autoC.type='checkbox'; autoC.checked=DS.autoPush; autoC.onchange=()=>{ DS.autoPush=autoC.checked; dsSave(); };
+  autoL.appendChild(autoC); autoL.appendChild(document.createTextNode(`ارفع لقطة للميدان أوتوماتيك كل ما أحفظ الملف${DS.lastSnapshot?' · آخر لقطة: '+_draftWhen({createdAt:DS.lastSnapshot}):''}`));
+  det.appendChild(autoL);
+  det.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:8px;line-height:1.7'},'اللقطة فيها الصفقات والتحصيلات والدفعات والمصروفات وأرصدة الأطراف والمخزون بأسماءها — من غير الخزنة ولا الأرباح ولا رأس المال ولا الشركاء ولا متوسط التكلفة. الرابط والرمز بيتحفظوا على الجهاز ده بس، مش في ملف البيانات. الخدمة بتشوف المسودات والأسماء فقط — الدفاتر ما بتطلعش منها أبداً.'));
   wrap.appendChild(det);
+  if(DB.queryLog){
+    const qd=document.createElement('details'); qd.open=true; qd.style.cssText='margin-bottom:14px;border:1px solid var(--border);border-radius:var(--r-sm);padding:10px 14px';
+    const qs=document.createElement('summary'); qs.style.cssText='cursor:pointer;font-weight:600;font-size:13px'; qs.textContent=`🗣 أسئلة الميدان (${DB.queryLog.length})`; qd.appendChild(qs);
+    DB.queryLog.forEach(q=>{
+      const w=el('div',{style:'border-top:1px solid var(--border);padding:8px 0;font-size:12.5px;line-height:1.7'});
+      w.appendChild(el('div',{style:'color:var(--muted)'},`<b style="color:var(--ink)">${esc(q.askedBy||q.asked_by||'')}</b> · ${esc(_draftWhen({createdAt:q.createdAt}))}${q.denied?' · <span class="badge badge-danger">ممنوع</span>':''}`));
+      w.appendChild(el('div',{},'«'+esc(q.question||'')+'»'));
+      w.appendChild(el('div',{style:'color:var(--ink-2)'},'← '+esc(q.answer||'')));
+      qd.appendChild(w);
+    });
+    if(!DB.queryLog.length) qd.appendChild(el('div',{style:'color:var(--faint);font-size:12.5px;padding-top:8px'},'لسه محدش سأل'));
+    wrap.appendChild(qd);
+  }
   const filters=el('div',{cls:'draft-filters'});
   [['pending',`معلّق (${counts.pending})`],['approved',`معتمد (${counts.approved})`],['rejected',`مرفوض (${counts.rejected})`],['all',`الكل (${all.length})`]].forEach(([k,l])=>{
     const b=el('button',{cls:`pl-chip${DB.draftsTab===k?' on':''}`},l); b.onclick=()=>{DB.draftsTab=k;render();}; filters.appendChild(b);

@@ -18,12 +18,15 @@ const express = require('express');
 const crypto  = require('crypto');
 const path    = require('path');
 const fs      = require('fs');
+const Q       = require('./query-engine');
 
 const PORT              = +process.env.PORT || 8790;
 const OWNER_TOKEN       = process.env.OWNER_TOKEN || '';
 const FIELD_CODES       = parseCodes(process.env.FIELD_CODES || '');
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL      = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_BASE       = (process.env.GEMINI_BASE || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '');   // override only for local tests
+const FIELD_SCOPES      = Q.parseScopes(process.env.FIELD_SCOPES || '');   // "عز:deals+money,أحمد:all" — default: everything
 const DATABASE_URL      = process.env.DATABASE_URL || '';
 const DATA_FILE         = process.env.DATA_FILE || path.join(__dirname, 'data', 'drafts.json');
 const MAX_STORED_AUDIO  = 2 * 1024 * 1024;   // bytes of the compressed recording we archive
@@ -77,6 +80,25 @@ class PgStore {
       ledger_list TEXT)`);
     await this.pool.query(`CREATE INDEX IF NOT EXISTS drafts_status_idx ON drafts(status, created_at DESC)`);
     await this.pool.query(`CREATE TABLE IF NOT EXISTS reference(id INT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+    await this.pool.query(`CREATE TABLE IF NOT EXISTS query_log(
+      id SERIAL PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), asked_by TEXT NOT NULL, intent TEXT, question TEXT,
+      query JSONB, answer TEXT, as_of TEXT, denied BOOLEAN NOT NULL DEFAULT false)`);
+  }
+  // The office snapshot lives in the same table as the name lists, under id 2.
+  async getSnapshot() {
+    const r = await this.pool.query(`SELECT data, updated_at FROM reference WHERE id = 2`);
+    return r.rows[0] ? { data: r.rows[0].data, updatedAt: r.rows[0].updated_at } : null;
+  }
+  async setSnapshot(data) {
+    await this.pool.query(`INSERT INTO reference(id, data, updated_at) VALUES(2, $1, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`, [JSON.stringify(data)]);
+  }
+  async logQuery(q) {
+    await this.pool.query(`INSERT INTO query_log(asked_by, intent, question, query, answer, as_of, denied) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+      [q.askedBy, q.intent || null, q.question || '', q.query ? JSON.stringify(q.query) : null, q.answer || '', q.asOf || null, !!q.denied]);
+  }
+  async listQueries(limit = 100) {
+    const r = await this.pool.query(`SELECT id, created_at, asked_by, intent, question, query, answer, as_of, denied FROM query_log ORDER BY created_at DESC LIMIT $1`, [limit]);
+    return r.rows.map(x => ({ id: x.id, createdAt: x.created_at, askedBy: x.asked_by, intent: x.intent, question: x.question, query: x.query, answer: x.answer, asOf: x.as_of, denied: x.denied }));
   }
   async insertDraft(d) {
     const r = await this.pool.query(
@@ -153,6 +175,10 @@ class FileStore {
   }
   async getReference() { return this.db.reference; }
   async setReference(data) { this.db.reference = { ...data, updatedAt: new Date().toISOString() }; this._save(); }
+  async getSnapshot() { return this.db.snapshot || null; }
+  async setSnapshot(data) { this.db.snapshot = { data, updatedAt: new Date().toISOString() }; this._save(); }
+  async logQuery(q) { (this.db.queries = this.db.queries || []).push({ id: this.db.queries.length + 1, createdAt: new Date().toISOString(), ...q }); this._save(); }
+  async listQueries(limit = 100) { return (this.db.queries || []).slice().reverse().slice(0, limit); }
 }
 
 // ── Gemini ────────────────────────────────────────────────────────────────────
@@ -202,6 +228,112 @@ function systemPrompt(ref, fieldName) {
 في المحادثة: الرسائل السابقة فيها فهمك القديم وإجابات المتحدث. ارجع المسودة كاملة محدّثة كل مرة، مش الفرق بس. transcript يفضل النص الأصلي الأول اللي اتقال.`;
 }
 
+// One call that decides what the person is doing: recording a transaction, asking a question, confirming,
+// cancelling, answering a follow-up, or just chatting. Numbers in answers never come from here.
+const QUERY_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    entity: { type: 'STRING', enum: ['deals', 'money', 'expenses', 'balances', 'inventory', 'all'] },
+    kinds: { type: 'ARRAY', items: { type: 'STRING', enum: ['purchase', 'sale', 'collection', 'supplierPay', 'expense'] } },
+    party: { type: 'STRING' }, material: { type: 'STRING' }, from: { type: 'STRING' }, to: { type: 'STRING' },
+    minAmount: { type: 'NUMBER' }, maxAmount: { type: 'NUMBER' },
+    aggregate: { type: 'STRING', enum: ['list', 'sum', 'count', 'group_party', 'group_day', 'group_material'] },
+    sort: { type: 'STRING', enum: ['newest', 'oldest', 'largest'] },
+    limit: { type: 'NUMBER' },
+    balanceSide: { type: 'STRING', enum: ['customers', 'suppliers', 'both'] },
+  },
+};
+const CONVERSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    transcript: { type: 'STRING' },
+    intent: { type: 'STRING', enum: ['record', 'query', 'both', 'confirm', 'cancel', 'clarify', 'chat'] },
+    confidence: { type: 'NUMBER' },
+    draft: {
+      type: 'OBJECT',
+      properties: {
+        type: { type: 'STRING', enum: DRAFT_TYPES }, fields: PARSE_SCHEMA.properties.fields,
+        missing: { type: 'ARRAY', items: { type: 'STRING' } }, question: { type: 'STRING' }, reply: { type: 'STRING' },
+      },
+    },
+    query: QUERY_SCHEMA,
+    question: { type: 'STRING', description: 'سؤال توضيحي واحد قصير' },
+    reply: { type: 'STRING', description: 'رد قصير للكلام العادي' },
+  },
+  required: ['transcript', 'intent'],
+};
+
+function conversePrompt({ ref, fieldName, allowed, pending, lastQuery, asOf }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const list = a => (a && a.length) ? a.join('، ') : '(القائمة فاضية)';
+  return `أنت مساعد في مكتب تجارة خامات بلاستيك في مصر. المتحدث ${fieldName} بيفتح الصفحة ويتكلم عامية مصرية، وأنت اللي بتفهم هو عايز إيه من غير ما يقولك:
+- record: بيوصف حركة عملها (اشترى، باع، صرف، قبض من عميل، دفع لمورد) → طلّع draft.
+- query: بيسأل عن حاجة (حساب فلان، مين باع/اشترى إيه، إيه اللي حصل امبارح، مخزون، آخر حركات، أكبر دين...) → طلّع query منظّم. أنت ما بتجاوبش بنفسك ولا بتحسب أرقام؛ الكود هو اللي بيجاوب.
+- both: الاتنين في جملة واحدة.
+- confirm: وافق على المسودة المعلّقة (أيوه، تمام، ابعت، ماشي، اعتمد).
+- cancel: رفض المسودة المعلّقة أو عايز يبدأ من جديد (لأ، إلغي، سيبك).
+- clarify: الكلام ممكن يتفهم بطريقتين (مثلاً "هاني عيسي تلاتين ألف": دفعة ولا بيسأل عن حسابه؟) أو ثقتك فيه واطية → اكتب سؤال واحد قصير في question.
+- chat: تحية أو كلام مالوش علاقة → reply قصير ولطيف.
+لو جملة فيها سؤال بصيغة "كام/مين/إيه" فهو query. لو فيها فعل ماضي بيصف حاجة حصلت فهو record. السؤال عمره ما يتحول لتسجيل.
+
+التاريخ النهارده: ${today}. "امبارح"، "الأسبوع ده"، "الشهر ده" تتحول لتواريخ from/to بصيغة YYYY-MM-DD.
+آخر تحديث للبيانات من المكتب: ${asOf || 'لسه ما اترفعتش بيانات'}.
+الأنواع المسموح للمتحدث يسأل عنها: ${[...allowed].join('، ')}.
+
+الأسماء لازم تتطابق مع القوائم حرفياً لما تلاقي الاسم أو ما يشبهه:
+- الموردون: ${list(ref && ref.suppliers)}
+- العملاء: ${list(ref && ref.customers)}
+- الخامات: ${list(ref && ref.materials)}
+- فئات المصروفات: ${list((ref && ref.expenseCats) || EXPENSE_CATS_DEFAULT)}
+
+للـ query: entity = deals للمشتريات والمبيعات، money للتحصيلات ودفعات الموردين، expenses للمصروفات، balances للأرصدة (balanceSide: customers = اللي علينا عندهم، suppliers = اللي لهم علينا)، inventory للمخزون، all لـ"إيه اللي حصل". kinds لو حدد نوع. party/material بالأسماء من القوائم. aggregate: list لقائمة، sum لإجمالي، count لعدد، group_party/group_day/group_material للتجميع. sort: newest افتراضي، largest لـ"أكبر". "حساب فلان" = entity balances و party فلان.
+${lastQuery ? `آخر سؤال في المحادثة كان: ${JSON.stringify(lastQuery)} — لو الجملة الحالية متابعة ("وجمال؟" "والشهر اللي قبله؟") عدّل عليه بس.` : ''}
+${pending ? `في مسودة حركة معلّقة قدامه دلوقتي: ${JSON.stringify(pending)}. لو بيصلّح فيها ("لأ خليها آجل") رجّع intent=record بالمسودة كاملة محدّثة. لو بيوافق intent=confirm. لو بيرفض intent=cancel.` : 'مفيش مسودة معلّقة: confirm و cancel مالهمش معنى، استخدم clarify أو chat.'}
+
+لـ record: قواعد الأرقام: حوّل الأرقام المنطوقة لأرقام (ألفين وسبعين = 2070، تلاتين ألف = 30000). الوحدة الافتراضية كيلوجرام والسعر للكيلو. paid هو الكاش المدفوع في نفس الحركة؛ "آجل" أو "على الحساب" = 0؛ لو ما ذكرش الدفع اسأل. txExpenses مصاريف الصفقة. الحقول الأساسية: purchase/sale: party, material, qty, price, paid. expense: cat, amount. collection/supplierPay: party, amount. لو في حقل أساسي ناقص حطه في draft.missing واكتب draft.question سؤال واحد بالعامية. لو مفيش ناقص: draft.question نص فاضي و draft.reply جملة بتلخص الحركة علشان يأكد. لا تخترع أرقام أو أسماء.
+transcript = النص المنطوق كما قيل بدون تعديل.`;
+}
+
+async function geminiConverse({ text, audio, mime, conversation, ctx }) {
+  const contents = [];
+  for (const m of (conversation || []).slice(-12)) {
+    const t = String(m.text || '').trim(); if (!t) continue;
+    contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: t }] });
+  }
+  const parts = [];
+  if (audio) parts.push({ inlineData: { mimeType: mime || 'audio/wav', data: audio } });
+  if (text) parts.push({ text: String(text) });
+  if (!parts.length) throw new Error('مفيش صوت ولا نص');
+  contents.push({ role: 'user', parts });
+  const j = await geminiCall({ systemInstruction: { parts: [{ text: conversePrompt(ctx) }] }, contents,
+    generationConfig: { temperature: 0.2, responseMimeType: 'application/json', responseSchema: CONVERSE_SCHEMA, maxOutputTokens: 2048 } });
+  let out; try { out = JSON.parse(j); } catch (e) { throw new Error('رد النموذج مش JSON'); }
+  if (!['record', 'query', 'both', 'confirm', 'cancel', 'clarify', 'chat'].includes(out.intent)) out.intent = 'clarify';
+  return out;
+}
+async function geminiCall(body) {
+  const url = `${GEMINI_BASE}/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || `Gemini HTTP ${r.status}`);
+  return ((((j.candidates || [])[0] || {}).content || {}).parts || []).map(p => p.text || '').join('');
+}
+// Phrase the already-computed result. The model may only restate these numbers; if it fails we use a template.
+async function phraseAnswer(question, query, result, asOf) {
+  const fallback = Q.fallbackAnswer(result, asOf);
+  if (result.denied || !GEMINI_API_KEY) return fallback;
+  try {
+    const compact = { count: result.count, totalAmount: result.totalAmount, totalQty: result.totalQty, rows: (result.rows || []).slice(0, 15), groups: (result.groups || []).slice(0, 10) };
+    const txt = await geminiCall({
+      systemInstruction: { parts: [{ text: 'أنت بترد على موظف ميداني في تجارة بلاستيك بالعامية المصرية في جملتين تلاتة بالكتير. استخدم الأرقام اللي في النتيجة بالحرف ولا تحسب ولا تخمّن أي رقم جديد. لو النتيجة فاضية قول كده. الأرقام بالجنيه. في الآخر اذكر آخر تحديث للبيانات. للأرصدة: customers والرقم موجب = العميل عليه فلوس لنا، suppliers والرقم موجب = إحنا علينا فلوس للمورد، السالب العكس. رد نص عادي من غير markdown.' }] },
+      contents: [{ role: 'user', parts: [{ text: `السؤال: ${question}\nالاستعلام: ${JSON.stringify(query)}\nالنتيجة: ${JSON.stringify(compact)}\nآخر تحديث: ${asOf || 'غير معروف'}` }] }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 400 },
+    });
+    const a = String(txt || '').trim();
+    return a || fallback;
+  } catch (e) { return fallback; }
+}
+
 async function geminiParse({ text, audio, mime, conversation, reference, fieldName }) {
   const contents = [];
   for (const m of (conversation || []).slice(-12)) {
@@ -218,7 +350,7 @@ async function geminiParse({ text, audio, mime, conversation, reference, fieldNa
     contents,
     generationConfig: { temperature: 0.2, responseMimeType: 'application/json', responseSchema: PARSE_SCHEMA, maxOutputTokens: 2048 },
   };
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
+  const url = `${GEMINI_BASE}/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j.error && j.error.message) || `Gemini HTTP ${r.status}`);
@@ -278,15 +410,17 @@ const b64ToBuf = (s, max) => {
 
 let store;
 
-app.get('/api/health', (req, res) => res.json({ ok: true, store: DATABASE_URL ? 'postgres' : 'file', ai: !!GEMINI_API_KEY, fieldUsers: Object.keys(FIELD_CODES).length }));
+app.get('/api/health', wrap(async (req, res) => res.json({ ok: true, store: DATABASE_URL ? 'postgres' : 'file', ai: !!GEMINI_API_KEY, fieldUsers: Object.keys(FIELD_CODES).length, snapshot: !!(await store.getSnapshot()) })));
 
 // ── field endpoints ──
-app.post('/api/field/login', limit(20), (req, res) => {
+const asOfText = rec => rec && rec.updatedAt ? new Date(rec.updatedAt).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' }) : '';
+app.post('/api/field/login', limit(20), wrap(async (req, res) => {
   const code = (req.body && req.body.code) || '';
   const name = Object.keys(FIELD_CODES).find(n => safeEq(FIELD_CODES[n], code));
   if (!name) return res.status(401).json({ error: 'كود الدخول غلط' });
-  res.json({ name, ai: !!GEMINI_API_KEY });
-});
+  const snap = await store.getSnapshot();
+  res.json({ name, ai: !!GEMINI_API_KEY, scopes: [...Q.scopeFor(FIELD_SCOPES, name)], snapshotAt: snap ? snap.updatedAt : null, asOf: asOfText(snap) });
+}));
 app.get('/api/field/reference', fieldAuth, wrap(async (req, res) => {
   const ref = (await store.getReference()) || { suppliers: [], customers: [], materials: [], expenseCats: EXPENSE_CATS_DEFAULT };
   res.json(ref);
@@ -298,6 +432,39 @@ app.post('/api/field/parse', fieldAuth, limit(30), wrap(async (req, res) => {
   const reference = await store.getReference();
   const result = await geminiParse({ text, audio: audioB64, mime, conversation, reference, fieldName: req.fieldName });
   res.json({ ok: true, result });
+}));
+// The single entry point for the capture page: the person just talks; the model decides record / query / confirm / ...
+app.post('/api/field/converse', fieldAuth, limit(40), wrap(async (req, res) => {
+  if (!GEMINI_API_KEY) return res.status(503).json({ error: 'الذكاء الاصطناعي مش متفعّل على الخدمة' });
+  const { text, audio, mime, conversation, pending, lastQuery } = req.body || {};
+  const audioB64 = audio ? b64ToBuf(audio, MAX_PARSE_AUDIO).toString('base64') : null;
+  const [reference, snapRec] = await Promise.all([store.getReference(), store.getSnapshot()]);
+  const allowed = Q.scopeFor(FIELD_SCOPES, req.fieldName), asOf = asOfText(snapRec);
+  const u = await geminiConverse({ text, audio: audioB64, mime, conversation, ctx: { ref: reference, fieldName: req.fieldName, allowed, pending: pending || null, lastQuery: lastQuery || null, asOf } });
+  const out = { kind: u.intent, transcript: String(u.transcript || text || '').trim(), confidence: u.confidence };
+  if ((u.intent === 'record' || u.intent === 'both') && u.draft && DRAFT_TYPES.includes(u.draft.type)) {
+    const d = u.draft;
+    out.record = { type: d.type, fields: (d.fields && typeof d.fields === 'object') ? d.fields : {}, missing: Array.isArray(d.missing) ? d.missing : [], question: String(d.question || '').trim(), reply: String(d.reply || '').trim() };
+  } else if (u.intent === 'record' || u.intent === 'both') { out.kind = u.intent === 'both' ? 'query' : 'clarify'; out.question = 'مش فاهم الحركة قصدك إيه، ممكن تعيدها؟'; }
+  if ((u.intent === 'query' || u.intent === 'both') && u.query) {
+    const result = snapRec ? Q.runQuery(u.query, snapRec.data, allowed) : { entity: u.query.entity || 'all', rows: [], count: 0, noSnapshot: true };
+    out.query = { structured: u.query, result, asOf };
+    out.answer = snapRec ? await phraseAnswer(out.transcript, u.query, result, asOf) : 'لسه المكتب ما رفعش بيانات للميدان.';
+    store.logQuery({ askedBy: req.fieldName, intent: u.intent, question: out.transcript, query: u.query, answer: out.answer, asOf, denied: !!result.denied }).catch(e => console.error('log', e.message));
+  }
+  if (u.intent === 'clarify') out.question = String(u.question || 'ممكن توضّح أكتر؟').trim();
+  if (u.intent === 'chat') out.reply = String(u.reply || 'أهلاً! قولّي حركة تسجلها أو اسأل عن أي حاجة.').trim();
+  res.json(out);
+}));
+// Deterministic query (no AI) — used for testing and as a fallback behind the same scope checks.
+app.post('/api/field/query', fieldAuth, limit(60), wrap(async (req, res) => {
+  const snapRec = await store.getSnapshot();
+  if (!snapRec) return res.status(404).json({ error: 'لسه المكتب ما رفعش بيانات للميدان' });
+  const allowed = Q.scopeFor(FIELD_SCOPES, req.fieldName), asOf = asOfText(snapRec);
+  const result = Q.runQuery((req.body && req.body.query) || {}, snapRec.data, allowed);
+  const answer = Q.fallbackAnswer(result, asOf);
+  store.logQuery({ askedBy: req.fieldName, intent: 'query', question: String((req.body && req.body.question) || '(استعلام مباشر)'), query: req.body && req.body.query, answer, asOf, denied: !!result.denied }).catch(() => {});
+  res.json({ result, answer, asOf });
 }));
 app.post('/api/field/drafts', fieldAuth, wrap(async (req, res) => {
   const b = req.body || {};
@@ -335,6 +502,15 @@ app.patch('/api/owner/drafts/:id', ownerAuth, wrap(async (req, res) => {
   if (!d) return res.status(404).json({ error: 'المسودة مش موجودة' });
   res.json(d);
 }));
+app.put('/api/owner/snapshot', ownerAuth, wrap(async (req, res) => {
+  const b = req.body || {};
+  const arr = x => Array.isArray(x) ? x.filter(r => r && typeof r === 'object').slice(0, 20000) : [];
+  const bal = b.balances && typeof b.balances === 'object' ? b.balances : {};
+  const data = { deals: arr(b.deals), money: arr(b.money), expenses: arr(b.expenses), inventory: arr(b.inventory), balances: { customers: arr(bal.customers), suppliers: arr(bal.suppliers) } };
+  await store.setSnapshot(data);
+  res.json({ ok: true, deals: data.deals.length, money: data.money.length, expenses: data.expenses.length, inventory: data.inventory.length });
+}));
+app.get('/api/owner/queries', ownerAuth, wrap(async (req, res) => { res.json(await store.listQueries(Math.min(+req.query.limit || 100, 500))); }));
 app.put('/api/owner/reference', ownerAuth, wrap(async (req, res) => {
   const b = req.body || {};
   const names = a => Array.isArray(a) ? a.map(x => String(x).trim()).filter(Boolean).slice(0, 2000) : [];

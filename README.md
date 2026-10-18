@@ -44,6 +44,10 @@ into a structured draft and asks for what is missing, and the draft waits for re
 local app pulls pending drafts into **صندوق المراجعة**. The service holds drafts and name lists only —
 never the ledger.
 
+The same page also answers questions («حساب فلكس كام؟»، «إيه اللي حصل امبارح؟») from a snapshot the app uploads
+(deals, payments, expenses, balances, stock — never cash, profit, capital or partners). The person never picks a mode:
+the sentence itself decides whether it is a record or a question.
+
 ## Running it
 
 Just open the file. For a local server (useful for testing import/export behaviour
