@@ -4144,6 +4144,29 @@ function dsStartAutoPull(){
   document.addEventListener('visibilitychange',()=>{ if(!document.hidden && DS.autoPull && dsReady()) dsPull(true); });
   if(DS.autoPull && dsReady()) setTimeout(()=>dsPull(true),1500);   // on open
 }
+// ── Field assistant's AI model, configured from here (stored encrypted on the service; keys are never sent back) ──
+async function dsLoadAi(){
+  if(!dsReady()) return;
+  try{ DS.ai=await dsFetch('/api/owner/ai'); }catch(e){ DS.ai={error:e.message}; }
+  if(DB.view==='drafts' && !DB.modal) render();
+}
+const AI_LABEL={gemini:'Gemini',grok:'Grok',claude:'Claude'};
+async function dsSaveAi(provider,model,key,base){
+  try{
+    const body={provider}; body[provider==='grok'?'xaiModel':provider==='claude'?'claudeModel':'geminiModel']=model;
+    if(key) body[provider==='grok'?'xaiKey':provider==='claude'?'claudeKey':'geminiKey']=key;
+    if(provider==='claude') body.claudeBase=base||'';
+    DS.ai=await dsFetch('/api/owner/ai',{method:'PUT',body:JSON.stringify(body)});
+    showToast(`✓ اتحفظ: ${AI_LABEL[DS.ai.provider]}${DS.ai.ai?'':' — لسه مفيش مفتاح'}`); render();
+  }catch(e){ showToast('✗ ما اتحفظش: '+e.message); }
+}
+async function dsTestAi(){
+  try{
+    showToast('⏳ بجرّب الاتصال بالنموذج…');
+    const r=await dsFetch('/api/owner/ai/test',{method:'POST',body:'{}'});
+    showToast(r.ok?`✓ ${AI_LABEL[r.provider]} (${r.model}) رد في ${r.ms}ms: ${r.reply}`:`✗ ${AI_LABEL[r.provider]}: ${r.error}`);
+  }catch(e){ showToast('✗ ما قدرتش أوصل للخدمة: '+e.message); }
+}
 // Names only (no money) so the capture page can match what people say to real records.
 async function dsPushReference(){
   if(!dsReady()){ showToast('⚠ اكتب رابط الخدمة ورمز المالك الأول'); return; }
@@ -4295,6 +4318,35 @@ function renderDrafts(){
   const pullC=document.createElement('input'); pullC.type='checkbox'; pullC.checked=DS.autoPull; pullC.onchange=()=>{ DS.autoPull=pullC.checked; dsSave(); if(DS.autoPull&&dsReady()) dsPull(true); };
   pullL.appendChild(pullC); pullL.appendChild(document.createTextNode('اجلب المسودات الجديدة أوتوماتيك كل دقيقة طول ما التطبيق مفتوح'));
   det.appendChild(pullL);
+  // ─ AI model settings
+  if(dsReady()){
+    if(!DS.ai && !DS._aiAsked){ DS._aiAsked=true; dsLoadAi(); }
+    const ai=DS.ai||{}, box=el('div',{style:'margin-top:14px;padding-top:12px;border-top:1px solid var(--border)'});
+    box.appendChild(el('div',{style:'font-size:13px;font-weight:600;margin-bottom:8px'},'🧠 نموذج الذكاء الاصطناعي للميدان'));
+    if(ai.error){ box.appendChild(el('div',{style:'font-size:12px;color:var(--neg)'},'ما قدرتش أجيب الإعدادات: '+esc(ai.error))); }
+    else if(!DS.ai){ box.appendChild(el('div',{style:'font-size:12px;color:var(--faint)'},'بيحمّل…')); }
+    else {
+      const g=document.createElement('div'); g.style.cssText='display:grid;grid-template-columns:1fr 1fr 2fr;gap:8px';
+      const sel=document.createElement('select'); [['gemini','Gemini (بيفهم الصوت)'],['grok','Grok (نص، والتليفون يحوّل الكلام)'],['claude','Claude (نص، والتليفون يحوّل الكلام)']].forEach(([v,l])=>{ const o=document.createElement('option'); o.value=v; o.textContent=l; if(v===ai.provider) o.selected=true; sel.appendChild(o); });
+      const mod=document.createElement('input'); mod.dir='ltr'; mod.setAttribute('aria-label','اسم الموديل');
+      const key=document.createElement('input'); key.type='password'; key.dir='ltr'; key.autocomplete='off'; key.setAttribute('aria-label','مفتاح API');
+      const base=document.createElement('input'); base.type='url'; base.dir='ltr'; base.setAttribute('aria-label','Base URL'); base.placeholder='Base URL (اختياري) — https://api.anthropic.com أو رابط الـ Gateway بتاعك';
+      const sync=()=>{ const p=sel.value; mod.value=p==='grok'?ai.xaiModel:p==='claude'?ai.claudeModel:ai.geminiModel; mod.placeholder=p==='grok'?'grok-3':p==='claude'?'claude-sonnet-5-5':'gemini-2.5-flash';
+        const cur=p==='grok'?ai.xaiKey:p==='claude'?ai.claudeKey:ai.geminiKey; key.value=''; key.placeholder=cur?`المفتاح الحالي: ${cur} (سيبه فاضي لو مش هتغيّره)`:'الصق المفتاح هنا';
+        base.style.display=p==='claude'?'':'none'; base.value=p==='claude'?(ai.claudeBase||''):''; };
+      [sel,mod,key,base].forEach(i=>i.style.cssText='background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;padding:8px 10px;color:var(--ink);font:inherit;font-size:13px;outline:none');
+      sel.onchange=sync; sync(); g.appendChild(sel); g.appendChild(mod); g.appendChild(key); box.appendChild(g);
+      base.style.marginTop='8px'; base.style.width='100%'; box.appendChild(base); sync();
+      const row=el('div',{style:'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center'});
+      const sv=el('button',{cls:'btn-primary',style:'font-size:12px;padding:6px 12px'},'حفظ'); sv.onclick=()=>dsSaveAi(sel.value,mod.value.trim(),key.value.trim(),base.value.trim());
+      const ts=el('button',{cls:'btn-ghost',style:'font-size:12px;padding:6px 12px'},'اختبار الاتصال'); ts.onclick=dsTestAi;
+      row.appendChild(sv); row.appendChild(ts);
+      row.appendChild(el('span',{style:'font-size:11.5px;color:var(--muted)'},`الشغال دلوقتي: <b>${AI_LABEL[ai.provider]}</b> · ${ai.ai?'<span class="c-green">فيه مفتاح</span>':'<span class="c-red">مفيش مفتاح</span>'} · ${ai.audioInput?'الصوت بيتبعت للنموذج':'الكلام بيتحوّل لنص على تليفون الراجل'} · المصدر: ${ai.fromApp?'التطبيق':'إعدادات Render'}`));
+      box.appendChild(row);
+      box.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:6px;line-height:1.7'},'المفتاح بيتخزّن مشفّر على الخدمة ومش بيرجع للتطبيق تاني (بتشوف آخر ٤ حروف بس). أي تغيير بيشتغل فوراً من غير إعادة نشر.'));
+    }
+    det.appendChild(box);
+  }
   det.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:8px;line-height:1.7'},'اللقطة فيها الصفقات والتحصيلات والدفعات والمصروفات وأرصدة الأطراف والمخزون بأسماءها — من غير الخزنة ولا الأرباح ولا رأس المال ولا الشركاء ولا متوسط التكلفة. الرابط والرمز بيتحفظوا على الجهاز ده بس، مش في ملف البيانات. الخدمة بتشوف المسودات والأسماء فقط — الدفاتر ما بتطلعش منها أبداً.'));
   wrap.appendChild(det);
   if(DB.queryLog){

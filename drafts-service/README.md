@@ -34,11 +34,22 @@ Every answer says "حسب آخر تحديث من المكتب: …".
 `FIELD_SCOPES="أحمد:deals+money"` limits a person to those groups (`deals`, `money`, `expenses`, `inventory`, or `all`).
 A person not listed can ask about everything. Out-of-scope questions are refused and logged.
 
-## Gemini or Grok
-`AI_PROVIDER=gemini` sends the recording straight to Gemini, which also transcribes it, and the recording is archived with the draft.
-`AI_PROVIDER=grok` (xAI) takes text only, so the capture page transcribes speech in the phone's browser
-(Web Speech API, Arabic) and sends the text — no recording is archived in that mode, and it needs Chrome or Safari.
-Everything else (intents, query engine, scopes, snapshot) is identical.
+## Choosing the model (Gemini, Grok or Claude)
+Set it **from the owner's app** (صندوق المراجعة ← ربط الخدمة ← 🧠 نموذج الذكاء الاصطناعي): provider, model, API key and, for
+Claude, an optional Base URL (a gateway). Settings are stored encrypted (AES-256-GCM, key derived from `OWNER_TOKEN`) in
+the database, win over environment variables, apply immediately and are never sent back (the app only sees a mask).
+"اختبار الاتصال" makes a tiny call and reports the latency or the exact error. If `OWNER_TOKEN` changes, saved keys can no
+longer be decrypted and the service falls back to environment variables.
+
+* **Gemini** takes the recording directly (and archives it with the draft).
+* **Grok / Claude** take text only, so the capture page transcribes speech in the phone's browser (Web Speech, Arabic;
+  Chrome/Safari) and sends text. No recording is archived in that mode.
+* Claude is called through the Messages API at `<base>/v1/messages`, sending both `x-api-key` and `Authorization: Bearer`
+  so it also works behind gateways. The base URL must be reachable **from the service** (Render is on the public internet).
+
+Environment fallbacks: `AI_PROVIDER`, `GEMINI_API_KEY`/`GEMINI_MODEL`, `XAI_API_KEY`/`XAI_MODEL`,
+`CLAUDE_API_KEY` (or `ANTHROPIC_API_KEY`)/`CLAUDE_MODEL`/`CLAUDE_BASE_URL` (or `ANTHROPIC_BASE_URL`).
+Everything else (intents, query engine, scopes, snapshot) is identical across providers.
 
 ## Run locally (no database, no keys)
 
@@ -93,6 +104,8 @@ Neon's free tier keeps the data (unlike Render's free Postgres, which expires af
 | owner | GET | `/api/owner/drafts?status=pending` | list drafts (no audio bytes) |
 | owner | GET | `/api/owner/drafts/:id/audio` | the recording |
 | owner | PATCH | `/api/owner/drafts/:id` | `{status, review, final, ledgerId, ledgerList}` |
+| owner | GET/PUT | `/api/owner/ai` | read / change the model settings (keys write-only) |
+| owner | POST | `/api/owner/ai/test` | one tiny call to the configured model |
 | owner | PUT | `/api/owner/reference` | upload the name lists |
 | owner | PUT | `/api/owner/snapshot` | upload the field snapshot (deals, money, expenses, balances, inventory) |
 | owner | GET | `/api/owner/queries` | log of what the field asked and what it was told |

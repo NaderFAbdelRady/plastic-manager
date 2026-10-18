@@ -28,6 +28,14 @@ http.createServer((req, res) => {
   let b = ''; req.on('data', c => b += c); req.on('end', () => {
     try {
       const j = JSON.parse(b || '{}');
+      if (/\/v1\/messages/.test(req.url)) {   // Anthropic Messages shape
+        const sysC = String(j.system || ''), lastC = ((j.messages || []).slice(-1)[0] || {}).content || '';
+        let outC;
+        if (/رجّع JSON فقط/.test(sysC)) outC = JSON.stringify(converse(lastC, false, /مسودة حركة معلّقة قدامه/.test(sysC)));
+        else { const m = lastC.match(/النتيجة: (\{.*\})\sآخر تحديث: (.*)$/s); const Q = require('../query-engine'); let res = {}; try { res = JSON.parse(m[1]); } catch (e) {}
+          res.entity = (lastC.match(/"entity":"(\w+)"/) || [])[1]; res.aggregate = (lastC.match(/"aggregate":"(\w+)"/) || [])[1] || 'list'; outC = Q.fallbackAnswer(res, m ? m[2] : ''); }
+        res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify({ content: [{ type: 'text', text: outC }], role: 'assistant', _seenHeaders: { key: !!req.headers['x-api-key'], bearer: !!req.headers['authorization'], ver: req.headers['anthropic-version'] } }));
+      }
       if (/\/v1\/chat\/completions/.test(req.url)) {   // xAI / Grok (OpenAI-style) shape
         const msgs = j.messages || [], sysG = (msgs[0] || {}).content || '', lastG = (msgs[msgs.length - 1] || {}).content || '';
         let outG;
