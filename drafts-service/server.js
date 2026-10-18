@@ -23,16 +23,26 @@ const Q       = require('./query-engine');
 const PORT              = +process.env.PORT || 8790;
 const OWNER_TOKEN       = process.env.OWNER_TOKEN || '';
 const FIELD_CODES       = parseCodes(process.env.FIELD_CODES || '');
-const GEMINI_API_KEY    = process.env.GEMINI_API_KEY || '';
-const XAI_API_KEY       = process.env.XAI_API_KEY || '';
-const XAI_MODEL         = process.env.XAI_MODEL || 'grok-3';
 const XAI_BASE          = (process.env.XAI_BASE || 'https://api.x.ai').replace(/\/+$/, '');   // override only for local tests
-// Which model family answers: AI_PROVIDER=gemini|grok, or whichever key is present. Grok takes text only (no audio
-// input), so with Grok the capture page transcribes speech in the browser and sends text.
-const PROVIDER          = (process.env.AI_PROVIDER || (XAI_API_KEY && !GEMINI_API_KEY ? 'grok' : 'gemini')).toLowerCase() === 'grok' ? 'grok' : 'gemini';
-const AI_ON             = PROVIDER === 'grok' ? !!XAI_API_KEY : !!GEMINI_API_KEY;
-const AUDIO_INPUT       = PROVIDER === 'gemini';
-const GEMINI_MODEL      = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+// The model settings can come from environment variables OR be set from the owner's app (stored encrypted in the
+// database, which wins). Grok takes text only, so with Grok the capture page transcribes speech in the browser.
+const ENV_AI = { provider: process.env.AI_PROVIDER || '', geminiKey: process.env.GEMINI_API_KEY || '', geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+                 xaiKey: process.env.XAI_API_KEY || '', xaiModel: process.env.XAI_MODEL || 'grok-3',
+                 claudeKey: process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || '', claudeModel: process.env.CLAUDE_MODEL || 'claude-sonnet-5-5',
+                 claudeBase: process.env.CLAUDE_BASE_URL || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com' };
+let GEMINI_API_KEY, GEMINI_MODEL, XAI_API_KEY, XAI_MODEL, CLAUDE_API_KEY, CLAUDE_MODEL, CLAUDE_BASE, PROVIDER, AI_ON, AUDIO_INPUT, AI_FROM_APP = false;
+function applyAi(db) {
+  db = db || {}; AI_FROM_APP = !!(db.provider || db.geminiKey || db.xaiKey || db.claudeKey || db.geminiModel || db.xaiModel || db.claudeModel || db.claudeBase);
+  GEMINI_API_KEY = db.geminiKey || ENV_AI.geminiKey; GEMINI_MODEL = db.geminiModel || ENV_AI.geminiModel;
+  XAI_API_KEY = db.xaiKey || ENV_AI.xaiKey; XAI_MODEL = db.xaiModel || ENV_AI.xaiModel;
+  CLAUDE_API_KEY = db.claudeKey || ENV_AI.claudeKey; CLAUDE_MODEL = db.claudeModel || ENV_AI.claudeModel;
+  CLAUDE_BASE = String(db.claudeBase || ENV_AI.claudeBase || 'https://api.anthropic.com').trim().replace(/\/+$/, '');
+  const want = String(db.provider || ENV_AI.provider || (CLAUDE_API_KEY && !GEMINI_API_KEY && !XAI_API_KEY ? 'claude' : XAI_API_KEY && !GEMINI_API_KEY ? 'grok' : 'gemini')).toLowerCase();
+  PROVIDER = want === 'grok' ? 'grok' : want === 'claude' ? 'claude' : 'gemini';
+  AI_ON = PROVIDER === 'grok' ? !!XAI_API_KEY : PROVIDER === 'claude' ? !!CLAUDE_API_KEY : !!GEMINI_API_KEY;
+  AUDIO_INPUT = PROVIDER === 'gemini';
+}
+applyAi();
 const GEMINI_BASE       = (process.env.GEMINI_BASE || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '');   // override only for local tests
 const FIELD_SCOPES      = Q.parseScopes(process.env.FIELD_SCOPES || '');   // "عز:deals+money,أحمد:all" — default: everything
 const DATABASE_URL      = process.env.DATABASE_URL || '';
@@ -93,6 +103,8 @@ class PgStore {
       query JSONB, answer TEXT, as_of TEXT, denied BOOLEAN NOT NULL DEFAULT false)`);
   }
   // The office snapshot lives in the same table as the name lists, under id 2.
+  async getAiSettings() { const r = await this.pool.query(`SELECT data FROM reference WHERE id = 3`); return r.rows[0] ? r.rows[0].data : null; }
+  async setAiSettings(data) { await this.pool.query(`INSERT INTO reference(id, data, updated_at) VALUES(3, $1, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`, [JSON.stringify(data)]); }
   async getSnapshot() {
     const r = await this.pool.query(`SELECT data, updated_at FROM reference WHERE id = 2`);
     return r.rows[0] ? { data: r.rows[0].data, updatedAt: r.rows[0].updated_at } : null;
@@ -183,6 +195,8 @@ class FileStore {
   }
   async getReference() { return this.db.reference; }
   async setReference(data) { this.db.reference = { ...data, updatedAt: new Date().toISOString() }; this._save(); }
+  async getAiSettings() { return this.db.aiSettings || null; }
+  async setAiSettings(data) { this.db.aiSettings = data; this._save(); }
   async getSnapshot() { return this.db.snapshot || null; }
   async setSnapshot(data) { this.db.snapshot = { data, updatedAt: new Date().toISOString() }; this._save(); }
   async logQuery(q) { (this.db.queries = this.db.queries || []).push({ id: this.db.queries.length + 1, createdAt: new Date().toISOString(), ...q }); this._save(); }
@@ -313,14 +327,32 @@ async function grokCall({ system, turns, json, maxTokens = 2048 }) {
   if (!r.ok) throw new Error((j.error && (j.error.message || j.error)) || (j.code ? String(j.code) : `Grok HTTP ${r.status}`));
   return String(((((j.choices || [])[0] || {}).message || {}).content) || '').replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
 }
+// Anthropic Messages API (also works behind a gateway: both x-api-key and Authorization are sent).
+async function claudeCall({ system, turns, maxTokens = 2048 }) {
+  const msgs = [];
+  for (const t of turns) {   // the API wants strictly alternating roles, starting with the user
+    const role = t.role === 'assistant' ? 'assistant' : 'user';
+    if (msgs.length && msgs[msgs.length - 1].role === role) msgs[msgs.length - 1].content += '\n' + t.text; else msgs.push({ role, content: t.text });
+  }
+  if (!msgs.length || msgs[0].role !== 'user') msgs.unshift({ role: 'user', content: '.' });
+  const r = await fetch(`${CLAUDE_BASE}/v1/messages`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': CLAUDE_API_KEY, Authorization: 'Bearer ' + CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, system, messages: msgs }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && (j.error.message || j.error)) || j.message || `Claude HTTP ${r.status}`);
+  return String((j.content || []).filter(b => b.type === 'text').map(b => b.text).join('')).replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+}
+const textCall = args => PROVIDER === 'claude' ? claudeCall(args) : grokCall(args);
+const modelName = () => PROVIDER === 'claude' ? CLAUDE_MODEL : PROVIDER === 'grok' ? XAI_MODEL : GEMINI_MODEL;
+const providerLabel = () => PROVIDER === 'claude' ? 'Claude' : PROVIDER === 'grok' ? 'Grok' : 'Gemini';
 async function geminiConverse({ text, audio, mime, conversation, ctx }) {
   const turns = (conversation || []).slice(-12).map(m => ({ role: m.role, text: String(m.text || '').trim() })).filter(t => t.text);
   let raw;
-  if (PROVIDER === 'grok') {
-    if (audio) throw new Error('Grok مش بيستقبل صوت — الصفحة المفروض تبعت نص');
+  if (PROVIDER !== 'gemini') {
+    if (audio) throw new Error(providerLabel() + ' مش بيستقبل صوت — الصفحة المفروض تبعت نص');
     if (!text) throw new Error('مفيش صوت ولا نص');
     const system = conversePrompt(ctx) + '\n\nرجّع JSON فقط (من غير أي كلام تاني) بالشكل ده:\n' + JSON.stringify(jsonSchemaOf(CONVERSE_SCHEMA));
-    raw = await grokCall({ system, turns: [...turns, { role: 'user', text: String(text) }], json: true });
+    raw = await textCall({ system, turns: [...turns, { role: 'user', text: String(text) }], json: true });
   } else {
     const contents = turns.map(t => ({ role: t.role === 'assistant' ? 'model' : 'user', parts: [{ text: t.text }] }));
     const parts = [];
@@ -350,8 +382,8 @@ async function phraseAnswer(question, query, result, asOf) {
     const compact = { count: result.count, totalAmount: result.totalAmount, totalQty: result.totalQty, rows: (result.rows || []).slice(0, 15), groups: (result.groups || []).slice(0, 10) };
     const sys = 'أنت بترد على موظف ميداني في تجارة بلاستيك بالعامية المصرية في جملتين تلاتة بالكتير. استخدم الأرقام اللي في النتيجة بالحرف ولا تحسب ولا تخمّن أي رقم جديد. لو النتيجة فاضية قول كده. الأرقام بالجنيه. في الآخر اذكر آخر تحديث للبيانات. للأرصدة: customers والرقم موجب = العميل عليه فلوس لنا، suppliers والرقم موجب = إحنا علينا فلوس للمورد، السالب العكس. رد نص عادي من غير markdown.';
     const usr = `السؤال: ${question}\nالاستعلام: ${JSON.stringify(query)}\nالنتيجة: ${JSON.stringify(compact)}\nآخر تحديث: ${asOf || 'غير معروف'}`;
-    const txt = PROVIDER === 'grok'
-      ? await grokCall({ system: sys, turns: [{ role: 'user', text: usr }], json: false, maxTokens: 400 })
+    const txt = PROVIDER !== 'gemini'
+      ? await textCall({ system: sys, turns: [{ role: 'user', text: usr }], json: false, maxTokens: 400 })
       : await geminiCall({ systemInstruction: { parts: [{ text: sys }] }, contents: [{ role: 'user', parts: [{ text: usr }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 400 } });
     const a = String(txt || '').trim();
     return a || fallback;
@@ -526,6 +558,50 @@ app.patch('/api/owner/drafts/:id', ownerAuth, wrap(async (req, res) => {
   if (!d) return res.status(404).json({ error: 'المسودة مش موجودة' });
   res.json(d);
 }));
+// ── AI settings, managed from the owner's app ──
+// API keys are encrypted at rest (AES-256-GCM, key derived from OWNER_TOKEN) and never sent back: the app only sees a mask.
+const aesKey = () => crypto.createHash('sha256').update('ai-settings|' + OWNER_TOKEN).digest();
+const seal = t => { if (!t) return ''; const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', aesKey(), iv); const ct = Buffer.concat([c.update(String(t), 'utf8'), c.final()]); return Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64'); };
+const unseal = b => { try { const raw = Buffer.from(String(b || ''), 'base64'); if (raw.length < 29) return ''; const d = crypto.createDecipheriv('aes-256-gcm', aesKey(), raw.subarray(0, 12)); d.setAuthTag(raw.subarray(12, 28)); return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString('utf8'); } catch (e) { return ''; } };
+const mask = k => k ? (k.length > 10 ? k.slice(0, 3) + '…' + k.slice(-4) : '•••') : '';
+async function loadAiFromStore() {
+  const st = await store.getAiSettings();
+  applyAi(st ? { provider: st.provider, geminiModel: st.geminiModel, xaiModel: st.xaiModel, claudeModel: st.claudeModel, claudeBase: st.claudeBase, geminiKey: unseal(st.geminiKey), xaiKey: unseal(st.xaiKey), claudeKey: unseal(st.claudeKey) } : null);
+}
+const aiStatus = () => ({ provider: PROVIDER, ai: AI_ON, audioInput: AUDIO_INPUT, fromApp: AI_FROM_APP, geminiModel: GEMINI_MODEL, xaiModel: XAI_MODEL, claudeModel: CLAUDE_MODEL, claudeBase: CLAUDE_BASE,
+  geminiKey: mask(GEMINI_API_KEY), xaiKey: mask(XAI_API_KEY), claudeKey: mask(CLAUDE_API_KEY) });
+app.get('/api/owner/ai', ownerAuth, wrap(async (req, res) => res.json(aiStatus())));
+app.put('/api/owner/ai', ownerAuth, wrap(async (req, res) => {
+  const b = req.body || {}, cur = (await store.getAiSettings()) || {};
+  const next = { provider: cur.provider || '', geminiModel: cur.geminiModel || '', xaiModel: cur.xaiModel || '', claudeModel: cur.claudeModel || '', claudeBase: cur.claudeBase || '', geminiKey: cur.geminiKey || '', xaiKey: cur.xaiKey || '', claudeKey: cur.claudeKey || '' };
+  if (b.provider != null) { if (!['gemini', 'grok', 'claude'].includes(b.provider)) return res.status(400).json({ error: 'المزوّد لازم يكون gemini أو grok أو claude' }); next.provider = b.provider; }
+  const model = x => String(x || '').trim().slice(0, 80);
+  if (b.geminiModel != null) next.geminiModel = model(b.geminiModel);
+  if (b.xaiModel != null) next.xaiModel = model(b.xaiModel);
+  if (b.claudeModel != null) next.claudeModel = model(b.claudeModel);
+  if (b.claudeBase != null) {
+    const u = String(b.claudeBase).trim();
+    if (u && !/^https?:\/\/[^\s]+$/i.test(u)) return res.status(400).json({ error: 'الـ Base URL لازم يبدأ بـ https://' });
+    next.claudeBase = u;
+  }
+  if (typeof b.claudeKey === 'string' && b.claudeKey.trim()) next.claudeKey = seal(b.claudeKey.trim());
+  if (b.clearClaudeKey) next.claudeKey = '';
+  if (typeof b.geminiKey === 'string' && b.geminiKey.trim()) next.geminiKey = seal(b.geminiKey.trim());
+  if (typeof b.xaiKey === 'string' && b.xaiKey.trim()) next.xaiKey = seal(b.xaiKey.trim());
+  if (b.clearGeminiKey) next.geminiKey = ''; if (b.clearXaiKey) next.xaiKey = '';
+  await store.setAiSettings(next); await loadAiFromStore();
+  res.json(aiStatus());
+}));
+app.post('/api/owner/ai/test', ownerAuth, wrap(async (req, res) => {
+  if (!AI_ON) return res.json({ ok: false, provider: PROVIDER, error: `مفيش مفتاح لـ ${providerLabel()}` });
+  const t0 = Date.now();
+  try {
+    const reply = PROVIDER !== 'gemini'
+      ? await textCall({ system: 'رد بكلمة واحدة بس.', turns: [{ role: 'user', text: 'قول: جاهز' }], json: false, maxTokens: 20 })
+      : await geminiCall({ contents: [{ role: 'user', parts: [{ text: 'رد بكلمة واحدة بس: جاهز' }] }], generationConfig: { maxOutputTokens: 20 } });
+    res.json({ ok: true, provider: PROVIDER, model: modelName(), ms: Date.now() - t0, reply: String(reply).slice(0, 80) });
+  } catch (e) { res.json({ ok: false, provider: PROVIDER, model: modelName(), error: String(e.message || e).slice(0, 240) }); }
+}));
 app.put('/api/owner/snapshot', ownerAuth, wrap(async (req, res) => {
   const b = req.body || {};
   const arr = x => Array.isArray(x) ? x.filter(r => r && typeof r === 'object').slice(0, 20000) : [];
@@ -549,9 +625,10 @@ app.get('/capture', (req, res) => res.sendFile(path.join(__dirname, 'public', 'c
 (async () => {
   store = DATABASE_URL ? new PgStore(DATABASE_URL) : new FileStore(DATA_FILE);
   await store.init();
+  await loadAiFromStore().catch(e => console.error('ai settings', e.message));
   if (!OWNER_TOKEN) console.warn('⚠ OWNER_TOKEN is not set — owner endpoints are disabled');
   if (!Object.keys(FIELD_CODES).length) console.warn('⚠ FIELD_CODES is empty — nobody can log in to the capture page');
-  if (!AI_ON) console.warn(`⚠ no API key for provider "${PROVIDER}" (${PROVIDER === 'grok' ? 'XAI_API_KEY' : 'GEMINI_API_KEY'}) — the capture page falls back to manual entry`);
-  else console.log(`AI provider: ${PROVIDER} (${PROVIDER === 'grok' ? XAI_MODEL : GEMINI_MODEL}), audio input: ${AUDIO_INPUT}`);
+  if (!AI_ON) console.warn(`⚠ no API key for provider "${PROVIDER}" — set it from the app (🧠 settings) or as an environment variable; the capture page falls back to manual entry`);
+  else console.log(`AI provider: ${PROVIDER} (${modelName()}), audio input: ${AUDIO_INPUT}`);
   app.listen(PORT, () => console.log(`drafts service on :${PORT} (${DATABASE_URL ? 'postgres' : 'file store ' + DATA_FILE})`));
 })().catch(e => { console.error('startup failed', e); process.exit(1); });
