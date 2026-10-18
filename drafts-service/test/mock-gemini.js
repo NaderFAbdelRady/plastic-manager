@@ -27,7 +27,16 @@ function converse(text, audio, hasPending) {
 http.createServer((req, res) => {
   let b = ''; req.on('data', c => b += c); req.on('end', () => {
     try {
-      const j = JSON.parse(b || '{}'); const last = (j.contents || []).slice(-1)[0] || { parts: [] };
+      const j = JSON.parse(b || '{}');
+      if (/\/v1\/chat\/completions/.test(req.url)) {   // xAI / Grok (OpenAI-style) shape
+        const msgs = j.messages || [], sysG = (msgs[0] || {}).content || '', lastG = (msgs[msgs.length - 1] || {}).content || '';
+        let outG;
+        if (/رجّع JSON فقط/.test(sysG)) outG = JSON.stringify(converse(lastG, false, /مسودة حركة معلّقة قدامه/.test(sysG)));
+        else { const m = lastG.match(/النتيجة: (\{.*\})\sآخر تحديث: (.*)$/s); const Q = require('../query-engine'); let res = {}; try { res = JSON.parse(m[1]); } catch (e) {}
+          res.entity = (lastG.match(/"entity":"(\w+)"/) || [])[1]; res.aggregate = (lastG.match(/"aggregate":"(\w+)"/) || [])[1] || 'list'; outG = Q.fallbackAnswer(res, m ? m[2] : ''); }
+        res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify({ choices: [{ message: { content: '```json\n' + outG + '\n```' } }] }));
+      }
+      const last = (j.contents || []).slice(-1)[0] || { parts: [] };
       const text = last.parts.filter(p => p.text).map(p => p.text).join(' '), audio = last.parts.some(p => p.inlineData);
       const sys = ((j.systemInstruction || {}).parts || [{}])[0].text || '';
       const schema = j.generationConfig && j.generationConfig.responseSchema;

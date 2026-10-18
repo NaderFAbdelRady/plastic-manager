@@ -8,7 +8,9 @@ process.env.FIELD_CODES  = process.env.FIELD_CODES  || 'عز:1234,أحمد:5678'
 process.env.FIELD_SCOPES = process.env.FIELD_SCOPES || 'أحمد:deals+money';   // أحمد can't ask about expenses or stock (shows the scope check)
 if ((process.env.DEV_MOCK_AI === '1' || process.argv.includes('--mock'))) {
   require('./test/mock-gemini.js');
-  process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'mock';
   process.env.GEMINI_BASE = process.env.GEMINI_BASE || 'http://localhost:8793';
+  process.env.XAI_BASE = process.env.XAI_BASE || 'http://localhost:8793';
+  if (process.argv.includes('--grok')) process.env.XAI_API_KEY = process.env.XAI_API_KEY || 'mock';   // test the Grok path (text only)
+  else process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'mock';
 }
 require('./server.js');

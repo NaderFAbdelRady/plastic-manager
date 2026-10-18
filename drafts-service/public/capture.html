@@ -124,7 +124,7 @@ $('speak').onclick = () => { S.speak = !S.speak; localStorage.setItem('pm_speak'
 // ── login ──
 async function login(code) {
   const j = await api('/api/field/login', { method: 'POST', body: JSON.stringify({ code }) });
-  S.code = code; S.name = j.name; S.ai = !!j.ai; S.scopes = j.scopes || []; S.asOf = j.asOf || ''; sessionStorage.setItem('pm_field_code', code);
+  S.code = code; S.name = j.name; S.ai = !!j.ai; S.audioInput = j.audioInput !== false; S.scopes = j.scopes || []; S.asOf = j.asOf || ''; sessionStorage.setItem('pm_field_code', code);
   show('login', false); ['appbar', 'chat', 'dock', 'logout', 'newChat', 'mine'].forEach(i => show(i));
   $('aiChip').textContent = S.ai ? '🤖 بفهم من الكلام' : '✍️ إدخال يدوي'; $('aiChip').className = 'chip ' + (S.ai ? 'ok' : 'off');
   $('asofChip').textContent = S.asOf ? '📅 بيانات المكتب: ' + S.asOf : '📅 المكتب لسه ما رفعش بيانات'; $('asofChip').className = 'chip ' + (S.asOf ? 'ok' : 'off');
@@ -158,7 +158,29 @@ async function startRec() {
   } catch (e) { sys('مفيش إذن للميكروفون — اسمح للصفحة تستخدمه أو اكتب'); }
 }
 function stopRec() { clearTimeout(S.timer); $('mic').classList.remove('rec'); $('mic').textContent = '🎤'; $('hint').textContent = 'بفهم…'; if (S.rec && S.rec.state !== 'inactive') S.rec.stop(); }
-$('mic').onclick = () => { if (S.busy) return; (S.rec && S.rec.state === 'recording') ? stopRec() : startRec(); };
+// When the AI can't take audio (Grok), the browser turns speech into text itself and we send the text.
+function startListen() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { sys('المتصفح ده ما بيفهمش الصوت — جرّب Chrome أو اكتب الحركة'); return; }
+  const r = new SR(); r.lang = 'ar-EG'; r.interimResults = true; r.continuous = true; r.maxAlternatives = 1;
+  let finalText = '', live = null;
+  r.onresult = e => { let interim = ''; finalText = ''; for (let i = 0; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) finalText += t + ' '; else interim += t; }
+    if (!live) live = add('me', ''); live.innerHTML = '🎤 ' + esc((finalText + interim).trim()) + ' …'; };
+  r.onerror = e => { if (e.error === 'not-allowed') sys('مفيش إذن للميكروفون — اسمح للصفحة تستخدمه أو اكتب'); else if (e.error !== 'no-speech' && e.error !== 'aborted') sys('ما سمعتش كويس (' + e.error + ') — جرّب تاني أو اكتب'); };
+  r.onend = async () => {
+    S.listening = false; $('mic').classList.remove('rec'); $('mic').textContent = '🎤';
+    const t = (finalText || (live ? live.textContent.replace(/^🎤\s*|\s*…$/g, '') : '')).trim();
+    if (!t) { if (live) live.remove(); idle(); return; }
+    live.innerHTML = '🎤 ' + esc(t); await converse({ text: t }, live, null);
+  };
+  S.sr = r; S.listening = true; if (window.speechSynthesis) speechSynthesis.cancel();
+  r.start(); $('mic').classList.add('rec'); $('mic').textContent = '⏹'; $('hint').textContent = 'بسمعك… اضغط تاني لما تخلص';
+}
+$('mic').onclick = () => {
+  if (S.busy) return;
+  if (S.audioInput === false) { S.listening ? S.sr.stop() : startListen(); return; }
+  (S.rec && S.rec.state === 'recording') ? stopRec() : startRec();
+};
 
 async function blobToWav16k(blob) {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();

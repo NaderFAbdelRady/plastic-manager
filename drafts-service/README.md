@@ -34,6 +34,12 @@ Every answer says "حسب آخر تحديث من المكتب: …".
 `FIELD_SCOPES="أحمد:deals+money"` limits a person to those groups (`deals`, `money`, `expenses`, `inventory`, or `all`).
 A person not listed can ask about everything. Out-of-scope questions are refused and logged.
 
+## Gemini or Grok
+`AI_PROVIDER=gemini` sends the recording straight to Gemini, which also transcribes it, and the recording is archived with the draft.
+`AI_PROVIDER=grok` (xAI) takes text only, so the capture page transcribes speech in the phone's browser
+(Web Speech API, Arabic) and sends the text — no recording is archived in that mode, and it needs Chrome or Safari.
+Everything else (intents, query engine, scopes, snapshot) is identical.
+
 ## Run locally (no database, no keys)
 
 ```bash
@@ -58,7 +64,9 @@ set `GEMINI_API_KEY` to enable the voice / free-text understanding.
    | `DATABASE_URL` | the Neon string |
    | `OWNER_TOKEN` | a long random secret (Render can generate it) |
    | `FIELD_CODES` | `عز:482913,أحمد:775120` — one code per person |
+   | `AI_PROVIDER` | `gemini` (default) or `grok` |
    | `GEMINI_API_KEY` | your Gemini key (server-side only) |
+   | `XAI_API_KEY` / `XAI_MODEL` | for `AI_PROVIDER=grok` (model default `grok-3`) |
    | `GEMINI_MODEL` | `gemini-2.5-flash` (default) |
    | `FIELD_SCOPES` | optional, e.g. `أحمد:deals+money` |
 
