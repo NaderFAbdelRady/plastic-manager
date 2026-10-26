@@ -19,6 +19,8 @@ const crypto  = require('crypto');
 const path    = require('path');
 const fs      = require('fs');
 const Q       = require('./query-engine');
+const ML      = require('./matrix-link');
+const AS      = require('./avatar-speech');
 
 const PORT              = +process.env.PORT || 8790;
 const OWNER_TOKEN       = process.env.OWNER_TOKEN || '';
@@ -463,7 +465,7 @@ function ownerAuth(req, res, next) {
   if (!OWNER_TOKEN || !safeEq(t, OWNER_TOKEN)) return res.status(401).json({ error: 'رمز المالك غلط' });
   next();
 }
-const wrap = fn => (req, res) => fn(req, res).catch(e => { if (!e.needText) console.error(e); res.status(e.needText ? 409 : 500).json({ error: e.message || 'خطأ', ...(e.needText ? { needText: true } : {}) }); });
+const wrap = fn => (req, res) => fn(req, res).catch(e => { if (!e.needText) console.error(e); res.status(e.status || (e.needText ? 409 : 500)).json({ error: e.message || 'خطأ', ...(e.needText ? { needText: true } : {}) }); });
 const b64ToBuf = (s, max) => {
   if (!s) return null;
   const buf = Buffer.from(String(s).replace(/^data:[^;]+;base64,/, ''), 'base64');
@@ -484,7 +486,7 @@ app.post('/api/field/login', limit(20), wrap(async (req, res) => {
   const name = Object.keys(FIELD_CODES).find(n => safeEq(FIELD_CODES[n], code));
   if (!name) return res.status(401).json({ error: 'كود الدخول غلط' });
   const snap = await store.getSnapshot();
-  res.json({ name, ai: AI_ON, audioInput: AUDIO_INPUT, scopes: [...scopesOf(name)], snapshotAt: snap ? snap.updatedAt : null, asOf: asOfText(snap) });
+  res.json({ name, ai: AI_ON, audioInput: AUDIO_INPUT, scopes: [...scopesOf(name)], snapshotAt: snap ? snap.updatedAt : null, asOf: asOfText(snap), sso_token: ML.ssoToken(name) });
 }));
 app.get('/api/field/reference', fieldAuth, wrap(async (req, res) => {
   const ref = (await store.getReference()) || { suppliers: [], customers: [], materials: [], expenseCats: EXPENSE_CATS_DEFAULT };
@@ -499,13 +501,13 @@ app.post('/api/field/parse', fieldAuth, limit(30), wrap(async (req, res) => {
   res.json({ ok: true, result });
 }));
 // The single entry point for the capture page: the person just talks; the model decides record / query / confirm / ...
-app.post('/api/field/converse', fieldAuth, limit(40), wrap(async (req, res) => {
-  if (!AI_ON) return res.status(503).json({ error: 'الذكاء الاصطناعي مش متفعّل على الخدمة' });
-  const { text, audio, mime, conversation, pending, lastQuery } = req.body || {};
+async function converseFor(fieldName, body) {
+  if (!AI_ON) { const e = new Error('الذكاء الاصطناعي مش متفعّل على الخدمة'); e.status = 503; throw e; }
+  const { text, audio, mime, conversation, pending, lastQuery } = body || {};
   const audioB64 = audio ? b64ToBuf(audio, MAX_PARSE_AUDIO).toString('base64') : null;
   const [reference, snapRec] = await Promise.all([store.getReference(), store.getSnapshot()]);
-  const allowed = scopesOf(req.fieldName), asOf = asOfText(snapRec);
-  const u = await geminiConverse({ text, audio: audioB64, mime, conversation, ctx: { ref: reference, fieldName: req.fieldName, allowed, pending: pending || null, lastQuery: lastQuery || null, asOf } });
+  const allowed = scopesOf(fieldName), asOf = asOfText(snapRec);
+  const u = await geminiConverse({ text, audio: audioB64, mime, conversation, ctx: { ref: reference, fieldName, allowed, pending: pending || null, lastQuery: lastQuery || null, asOf } });
   const out = { kind: u.intent, transcript: String(u.transcript || text || '').trim(), confidence: u.confidence };
   if ((u.intent === 'record' || u.intent === 'both') && u.draft && DRAFT_TYPES.includes(u.draft.type)) {
     const d = u.draft;
@@ -515,12 +517,13 @@ app.post('/api/field/converse', fieldAuth, limit(40), wrap(async (req, res) => {
     const result = snapRec ? Q.runQuery(u.query, snapRec.data, allowed) : { entity: u.query.entity || 'all', rows: [], count: 0, noSnapshot: true };
     out.query = { structured: u.query, result, asOf };
     out.answer = snapRec ? await phraseAnswer(out.transcript, u.query, result, asOf) : 'لسه المكتب ما رفعش بيانات للميدان.';
-    store.logQuery({ askedBy: req.fieldName, intent: u.intent, question: out.transcript, query: u.query, answer: out.answer, asOf, denied: !!result.denied }).catch(e => console.error('log', e.message));
+    store.logQuery({ askedBy: fieldName, intent: u.intent, question: out.transcript, query: u.query, answer: out.answer, asOf, denied: !!result.denied }).catch(e => console.error('log', e.message));
   }
   if (u.intent === 'clarify') out.question = String(u.question || 'ممكن توضّح أكتر؟').trim();
   if (u.intent === 'chat') out.reply = String(u.reply || 'أهلاً! قولّي حركة تسجلها أو اسأل عن أي حاجة.').trim();
-  res.json(out);
-}));
+  return out;
+}
+app.post('/api/field/converse', fieldAuth, limit(40), wrap(async (req, res) => res.json(await converseFor(req.fieldName, req.body))));
 // Deterministic query (no AI) — used for testing and as a fallback behind the same scope checks.
 app.post('/api/field/query', fieldAuth, limit(60), wrap(async (req, res) => {
   const snapRec = await store.getSnapshot();
@@ -547,6 +550,47 @@ app.post('/api/field/drafts', fieldAuth, wrap(async (req, res) => {
 app.get('/api/field/drafts', fieldAuth, wrap(async (req, res) => {
   const rows = await store.listDrafts({ submittedBy: req.fieldName, limit: 30 });
   res.json(rows.map(d => ({ id: d.id, createdAt: d.createdAt, type: d.type, transcript: d.transcript, fields: d.fields, status: d.status, reviewNote: d.review && d.review.note || '' })));
+}));
+
+
+// ── the avatar's server (Matrix) acting for one field person ──
+// Same limits as /api/field/*: the person's scopes, their name on every draft. The key proves the call comes from the avatar's server.
+function serviceAuth(req, res, next) {
+  if (!ML.serviceKeyOk(req.get('x-service-key'))) return res.status(401).json({ error: 'not allowed' });
+  const name = String((req.body && req.body.person) || '');
+  if (!Object.prototype.hasOwnProperty.call(FIELD_CODES, name)) return res.status(403).json({ error: 'الشخص ده مش متسجّل أو متقفل' });
+  req.fieldName = name; next();
+}
+const SCOPE_LABEL = { deals: 'الصفقات', money: 'الفلوس والأرصدة', expenses: 'المصروفات', inventory: 'المخزون', finance: 'الماليات' };
+app.post('/api/service/converse', serviceAuth, limit(60), wrap(async (req, res) => {
+  const b = req.body || {}, pending = Array.isArray(b.pending) ? b.pending[0] : b.pending;       // the avatar holds a list of records; this service has one draft at a time
+  const out = await converseFor(req.fieldName, { text: b.text, conversation: b.conversation, pending: pending || null, lastQuery: b.lastQuery });
+  out.records = out.record ? [{ type: out.record.type, fields: out.record.fields }] : [];
+  const board = AS.boardFor(out); if (board) out.board = board;
+  out.speech = AS.speechFor(out, !!pending);
+  res.json(out);
+}));
+app.post('/api/service/brief', serviceAuth, wrap(async (req, res) => {
+  const name = req.fieldName;
+  const [rows, snap] = await Promise.all([store.listDrafts({ submittedBy: name, limit: 30 }), store.getSnapshot()]);
+  const recent = Date.now() - 72 * 3600 * 1000, lines = [`أهلاً ${name}.`];
+  const pending = rows.filter(d => d.status === 'pending').length;
+  if (pending) lines.push(`عندك ${pending} حركة لسه في المراجعة.`);
+  const decided = rows.filter(d => d.status !== 'pending' && new Date(d.updatedAt).getTime() > recent).slice(0, 3);
+  if (decided.length) lines.push('اللي بعتّه: ' + decided.map(d => `${AS.describeRecord(d)} ${d.status === 'approved' ? 'اتعتمدت' : 'اترفضت'}${d.review && d.review.note ? ' (' + d.review.note + ')' : ''}`).join('؛ ') + '.');
+  const asOf = asOfText(snap);
+  lines.push(asOf ? `بيانات المكتب لحد ${asOf}.` : 'المكتب لسه ما رفعش بيانات للأسئلة.');
+  const topics = [...scopesOf(name)].map(x => SCOPE_LABEL[x]).filter(Boolean);
+  lines.push('تقدر تسجّل شراء أو بيع أو مصروف أو تحصيل أو دفعة لمورد' + (topics.length ? '، أو تسأل عن ' + topics.join(' و') : '') + '. تحب نبدأ بإيه؟');
+  res.json({ speech: AS.plain(lines.join(' ')), pending, scopes: [...scopesOf(name)], asOf });
+}));
+app.post('/api/service/drafts', serviceAuth, wrap(async (req, res) => {
+  const b = req.body || {}, recs = (Array.isArray(b.records) ? b.records : []).filter(r => r && DRAFT_TYPES.includes(r.type) && r.fields && typeof r.fields === 'object').slice(0, 8);
+  if (!recs.length) return res.status(400).json({ error: 'مفيش حركة تتبعت' });
+  const conv = Array.isArray(b.conversation) ? b.conversation.slice(-20).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text || '').slice(0, 2000) })) : [];
+  const ids = [];
+  for (const r of recs) ids.push((await store.insertDraft({ submittedBy: req.fieldName, source: 'text', transcript: String(b.transcript || '').slice(0, 4000), type: r.type, fields: r.fields, conversation: conv, audio: null, audioMime: null, audioSeconds: null })).id);
+  res.status(201).json({ ok: true, ids, speech: `بعتّها للمراجعة (${ids.length}). أول ما المكتب يعتمدها هقولك. فيه حاجة تانية؟` });
 }));
 
 // ── owner endpoints ──
@@ -644,9 +688,13 @@ app.put('/api/owner/reference', ownerAuth, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// ── static: the field capture page ──
-app.use(express.static(path.join(__dirname, 'public'), { index: 'capture.html', extensions: ['html'] }));
-app.get('/capture', (req, res) => res.sendFile(path.join(__dirname, 'public', 'capture.html')));
+// ── static: the field pages ──
+// `/` is the avatar's door (choose the avatar or the classic page) when the avatar is wired up, else the classic capture page itself.
+const PUB = path.join(__dirname, 'public');
+app.get(['/', '/field'], (req, res) => res.sendFile(path.join(PUB, ML.avatarConfig() ? 'field-avatar.html' : 'capture.html')));
+app.get(['/classic', '/capture', '/field/classic'], (req, res) => res.sendFile(path.join(PUB, 'capture.html')));
+app.get('/api/field/avatar', (req, res) => res.json({ avatar: ML.avatarConfig() }));            // where the avatar lives (public values only; the secret never leaves the server)
+app.use(express.static(PUB, { index: false, extensions: ['html'] }));
 
 (async () => {
   store = DATABASE_URL ? new PgStore(DATABASE_URL) : new FileStore(DATA_FILE);

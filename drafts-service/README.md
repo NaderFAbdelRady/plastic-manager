@@ -98,18 +98,39 @@ set `GEMINI_API_KEY` to enable the voice / free-text understanding.
 The free Render instance sleeps after 15 minutes idle; the first request afterwards takes ~30 s.
 Neon's free tier keeps the data (unlike Render's free Postgres, which expires after 90 days).
 
+## The avatar (Matrix) — optional
+
+With the four variables below set, the page people open (`/`) shows a short choice after the code is accepted: **مساعدة المكتب (the avatar)** or **the classic page**
+(`/classic`, the page described above, unchanged and with the same code). With none of them set, `/` is the classic page and nothing here is reachable.
+
+The person types the code here; this service then signs a 12-hour sign-in for that person (`matrix-link.js`) and the page hands it to the avatar's frame, so the code never
+goes to Matrix. The avatar's own server calls `/api/service/*` with `X-Service-Key` and the person's name: it uses the same understanding (`converse`), the same scopes, the
+same snapshot and the same review inbox as the classic page. What the avatar says and the table it puts on the screen (`avatar-speech.js`) are written here from the draft or
+from the query engine's rows — never by a model — and dates carry their weekday («السبت 24/10»).
+
+| Variable | Value |
+|---|---|
+| `FIELD_MATRIX_URL` | the avatar app, e.g. `https://matrix-xxxx.onrender.com` |
+| `FIELD_MATRIX_PK` / `FIELD_MATRIX_SECRET` | the deployment's public key and secret (Matrix → Deployments) |
+| `FIELD_SERVICE_KEY` | a long random string (16+ characters); the same value as `MATRIX_PLASTIC_SERVICE_KEY` on Matrix |
+
+On Matrix set `MATRIX_PLASTIC_URL` (this service's public address) and `MATRIX_PLASTIC_SERVICE_KEY`, and create a deployment for the persona «مساعدة المكتب» with this
+service's address as its only allowed site and "require login" on. Try it without a model or a Matrix: `node test/avatar-smoke.js`.
+
 ## API
 
 | who | method | path | purpose |
 |---|---|---|---|
 | anyone | GET | `/api/health` | liveness, store type, AI on/off |
-| field | POST | `/api/field/login` `{code}` | returns the person's name |
+| field | POST | `/api/field/login` `{code}` | returns the person's name (and, with the avatar configured, `sso_token`) |
 | field | GET | `/api/field/reference` | names of suppliers / customers / materials / expense categories |
 | field | POST | `/api/field/converse` `{text? audio? mime? conversation? pending? lastQuery?}` | the one entry point: record / query / both / confirm / cancel / clarify / chat |
 | field | POST | `/api/field/query` `{query}` | deterministic query (no AI), same scope checks |
 | field | POST | `/api/field/parse` `{text? audio? mime? conversation?}` | Gemini → structured draft + follow-up question |
 | field | POST | `/api/field/drafts` | submit a draft (+ optional recording, ≤ 2 MB, ≤ 120 s) |
 | field | GET | `/api/field/drafts` | the person's own drafts with status |
+| avatar | POST | `/api/service/{converse,brief,drafts}` `{person, …}` | the avatar's server acting for one person (`X-Service-Key`) |
+| anyone | GET | `/api/field/avatar` | where the avatar lives (`{url, pk}` or null) |
 | owner | GET | `/api/owner/drafts?status=pending` | list drafts (no audio bytes) |
 | owner | GET | `/api/owner/drafts/:id/audio` | the recording |
 | owner | PATCH | `/api/owner/drafts/:id` | `{status, review, final, ledgerId, ledgerList}` |

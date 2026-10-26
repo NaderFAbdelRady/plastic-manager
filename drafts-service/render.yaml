@@ -20,3 +20,12 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
+      # The avatar (Matrix) — optional; all four together switch it on, none = the classic page only.
+      - key: FIELD_MATRIX_URL
+        sync: false
+      - key: FIELD_MATRIX_PK
+        sync: false
+      - key: FIELD_MATRIX_SECRET
+        sync: false
+      - key: FIELD_SERVICE_KEY
+        sync: false
