@@ -54,6 +54,14 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   console.log('   table:', r.j.board.blocks[0].title, r.j.board.blocks[0].rows.length, 'rows;', r.j.speech);
   // a person without the inventory scope is refused, and no table leaks
   r = await call('/api/service/converse', { person: 'أحمد', text: 'المخزون كام' }, KEY); assert.ok(!r.j.board, 'no table for a denied question'); console.log('   denied:', r.j.speech);
+  // 6b. "the last sales and the last purchases" in one sentence: the newest rows are all sales, but the purchases must still be answered (split per kind)
+  const deals = [1, 2, 3].map(i => ({ kind: 'sale', date: `2026-10-2${i}`, party: 'عميل' + i, material: 'ABS', qty: 100, net: 1000 * i })).concat([1, 2].map(i => ({ kind: 'purchase', date: `2026-10-1${i}`, party: 'مورد' + i, material: 'PP', qty: 50, net: 500 * i })));
+  assert.strictEqual((await call('/api/owner/snapshot', { ...snap, deals }, OWNER, 'PUT')).s, 200);
+  r = await call('/api/service/converse', { person: 'عز', text: 'آخر المبيعات وآخر المشتريات' }, KEY); assert.strictEqual(r.s, 200, JSON.stringify(r.j));
+  assert.strictEqual(r.j.queries.length, 2, 'one query per kind'); assert.deepStrictEqual(r.j.queries.map(q => q.structured.kinds[0]), ['sale', 'purchase']);
+  assert.ok(r.j.queries[1].result.rows.every(x => x.kind === 'purchase') && r.j.queries[1].result.count === 2, 'the purchases are not pushed out by the newer sales');
+  assert.ok(/المبيعات/.test(r.j.answer) && /المشتريات/.test(r.j.answer), r.j.answer); assert.strictEqual(r.j.board.blocks.length, 2); assert.deepStrictEqual(r.j.board.blocks.map(b => b.id), ['t1', 't2']);
+  console.log('   both kinds:', r.j.board.blocks.map(b => b.title + ' ' + b.rows.length + ' rows').join(' | '));
   // 7. pages: the avatar's door, and the classic page one click away
   const home = await fetch(B + '/').then(x => x.text()), classic = await fetch(B + '/classic').then(x => x.text());
   assert.ok(home.includes('pickClassic'), 'the door has the choice'); assert.ok(classic.includes('pm_field_code') && !classic.includes('pickClassic'), 'the classic page is the original');

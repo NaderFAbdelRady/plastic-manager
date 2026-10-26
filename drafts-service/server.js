@@ -287,6 +287,7 @@ const CONVERSE_SCHEMA = {
       },
     },
     query: QUERY_SCHEMA,
+    more_queries: { type: 'ARRAY', items: QUERY_SCHEMA, description: 'أسئلة تانية مختلفة في نفس الجملة (لحد ٣)' },
     question: { type: 'STRING', description: 'سؤال توضيحي واحد قصير' },
     reply: { type: 'STRING', description: 'رد قصير للكلام العادي' },
   },
@@ -304,6 +305,7 @@ function conversePrompt({ ref, fieldName, allowed, pending, lastQuery, asOf }) {
 - cancel: رفض المسودة المعلّقة أو عايز يبدأ من جديد (لأ، إلغي، سيبك).
 - clarify: الكلام ممكن يتفهم بطريقتين (مثلاً "هاني عيسي تلاتين ألف": دفعة ولا بيسأل عن حسابه؟) أو ثقتك فيه واطية → اكتب سؤال واحد قصير في question.
 - chat: تحية أو كلام مالوش علاقة → reply قصير ولطيف.
+لو سأل عن أكتر من حاجة مختلفة في جملة واحدة («آخر المبيعات وآخر المشتريات»، «حساب فلان وحساب علان») حط الأول في query والباقي في more_queries (لحد ٣): استعلام لكل حاجة، ولا تخلط نوعين في استعلام واحد.
 لو جملة فيها سؤال بصيغة "كام/مين/إيه" فهو query. لو فيها فعل ماضي بيصف حاجة حصلت فهو record. السؤال عمره ما يتحول لتسجيل.
 
 التاريخ النهارده: ${today}. "امبارح"، "الأسبوع ده"، "الشهر ده" تتحول لتواريخ from/to بصيغة YYYY-MM-DD.
@@ -384,6 +386,18 @@ async function geminiCall(body) {
   return ((((j.candidates || [])[0] || {}).content || {}).parts || []).map(p => p.text || '').join('');
 }
 // Phrase the already-computed result. The model may only restate these numbers; if it fails we use a template.
+// One spoken sentence can ask for several things ("آخر المبيعات وآخر المشتريات"). The model puts the first in `query` and the rest in `more_queries`; and a single
+// list query over several kinds of deal (sale + purchase) is split per kind, so the newest rows of one kind can never push the other kind out of the answer.
+const KIND_LABEL = { purchase: 'المشتريات', sale: 'المبيعات', collection: 'التحصيلات', supplierPay: 'دفعات الموردين', expense: 'المصروفات' };
+function planQueries(q, more) {
+  const plan = [], isQ = x => x && typeof x === 'object' && !Array.isArray(x);
+  const add = (query, label) => { if (plan.length < 4) plan.push({ q: query, label: label || '' }); };
+  const kinds = Array.isArray(q.kinds) ? q.kinds.filter(k => KIND_LABEL[k]) : [];
+  if ((q.aggregate || 'list') === 'list' && kinds.length > 1) kinds.slice(0, 4).forEach(k => add({ ...q, kinds: [k] }, KIND_LABEL[k]));
+  else add(q, '');
+  (Array.isArray(more) ? more : []).filter(isQ).slice(0, 3).forEach(m => add(m, ''));
+  return plan;
+}
 async function phraseAnswer(question, query, result, asOf) {
   const fallback = Q.fallbackAnswer(result, asOf);
   if (result.denied || !AI_ON) return fallback;
@@ -514,10 +528,15 @@ async function converseFor(fieldName, body) {
     out.record = { type: d.type, fields: (d.fields && typeof d.fields === 'object') ? d.fields : {}, missing: Array.isArray(d.missing) ? d.missing : [], question: String(d.question || '').trim(), reply: String(d.reply || '').trim() };
   } else if (u.intent === 'record' || u.intent === 'both') { out.kind = u.intent === 'both' ? 'query' : 'clarify'; out.question = 'مش فاهم الحركة قصدك إيه، ممكن تعيدها؟'; }
   if ((u.intent === 'query' || u.intent === 'both') && u.query) {
-    const result = snapRec ? Q.runQuery(u.query, snapRec.data, allowed) : { entity: u.query.entity || 'all', rows: [], count: 0, noSnapshot: true };
-    out.query = { structured: u.query, result, asOf };
-    out.answer = snapRec ? await phraseAnswer(out.transcript, u.query, result, asOf) : 'لسه المكتب ما رفعش بيانات للميدان.';
-    store.logQuery({ askedBy: fieldName, intent: u.intent, question: out.transcript, query: u.query, answer: out.answer, asOf, denied: !!result.denied }).catch(e => console.error('log', e.message));
+    const parts = await Promise.all(planQueries(u.query, u.more_queries).map(async p => {
+      const result = snapRec ? Q.runQuery(p.q, snapRec.data, allowed) : { entity: p.q.entity || 'all', rows: [], count: 0, noSnapshot: true };
+      const answer = snapRec ? await phraseAnswer(out.transcript, p.q, result, asOf) : 'لسه المكتب ما رفعش بيانات للميدان.';
+      store.logQuery({ askedBy: fieldName, intent: u.intent, question: out.transcript, query: p.q, answer, asOf, denied: !!result.denied }).catch(e => console.error('log', e.message));
+      return { structured: p.q, result, asOf, label: p.label, answer };
+    }));
+    out.query = { structured: parts[0].structured, result: parts[0].result, asOf };
+    if (parts.length > 1) out.queries = parts.map(({ structured, result, label }) => ({ structured, result, asOf, label }));
+    out.answer = parts.length === 1 ? parts[0].answer : parts.map(p => (p.label ? p.label + ': ' : '') + p.answer).join(' ');
   }
   if (u.intent === 'clarify') out.question = String(u.question || 'ممكن توضّح أكتر؟').trim();
   if (u.intent === 'chat') out.reply = String(u.reply || 'أهلاً! قولّي حركة تسجلها أو اسأل عن أي حاجة.').trim();

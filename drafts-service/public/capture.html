@@ -277,8 +277,12 @@ function handle(r, heard, voice) {
 
 // ── answers ──
 function showAnswer(r) {
+  const qs = r.queries && r.queries.length > 1 ? r.queries : [r.query];       // one sentence can ask for several things: each gets its own table
+  qs.forEach((qq, i) => showAnswerOne({ answer: i === 0 ? r.answer : '', query: qq }, qq.label, i === qs.length - 1));
+}
+function showAnswerOne(r, label, last) {
   const res = r.query.result || {};
-  let html = esc(r.answer);
+  let html = (label ? `<b>آخر ${esc(label)}</b><br>` : '') + esc(r.answer);
   const th = a => '<tr>' + a.map(x => `<th>${x}</th>`).join('') + '</tr>', td = a => '<tr>' + a.map((x, i) => `<td class="${/^[\d,.\-]+$/.test(String(x)) ? 'n' : ''}">${esc(x)}</td>`).join('') + '</tr>';
   let tbl = '';
   const FL = { cash: 'الخزنة', cashIn: 'مقبوض من البيع', collections: 'تحصيلات', boughtCash: 'مشتريات كاش', paidToSuppliers: 'دفعات موردين', expenses: 'مصروفات', partnerDraws: 'سحوبات شركاء', distributionPaid: 'توزيع أرباح مدفوع', partnerFundingIn: 'تمويل شركاء (داخل)', partnerFundingOut: 'رد تمويل',
@@ -300,7 +304,7 @@ function showAnswer(r) {
   else if (res.groups && res.groups.length) tbl = th(['', 'الإجمالي', 'العدد']) + res.groups.slice(0, 12).map(g => td([g.key, fmtN(g.amount), g.count])).join('');
   else if (res.rows && res.rows.length) tbl = th(['التاريخ', 'النوع', 'الطرف', 'التفاصيل', 'المبلغ']) + res.rows.slice(0, 15).map(x => td([x.date, x.kindAr || x.kind, x.party || '', x.material ? (x.material + (x.qty ? ' ' + fmtN(x.qty) : '')) : (x.text || ''), fmtN(x.amount)])).join('');
   if (tbl) html += '<table class="res">' + tbl + '</table>';
-  if (r.query.asOf) html += `<div class="asof">حسب آخر تحديث من المكتب: ${esc(r.query.asOf)}</div>`;
+  if (last && r.query.asOf) html += `<div class="asof">حسب آخر تحديث من المكتب: ${esc(r.query.asOf)}</div>`;
   add('bot', html);
 }
 function balText(x) { const v = Math.round(x.balance); if (!v) return 'خالص'; return x.side === 'customers' ? (v > 0 ? 'عليه ' + fmtN(v) : 'ليه ' + fmtN(-v)) : (v > 0 ? 'ليه علينا ' + fmtN(v) : 'مقدم ' + fmtN(-v)); }

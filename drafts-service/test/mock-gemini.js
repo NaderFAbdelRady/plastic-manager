@@ -19,6 +19,7 @@ function converse(text, audio, hasPending) {
   if (/حساب\s+(\S+)/.test(t)) { const m = t.match(/حساب\s+(\S+(?:\s\S+)?)/)[1].replace(/\s?(كام|ايه|إيه)\??$/, '').replace('؟', ''); return R({ intent: 'query', query: { entity: 'balances', party: m } }); }
   if (/مين باع|باع/.test(t)) return R({ intent: 'query', query: { entity: 'deals', kinds: ['sale'], from: daysAgo(30), aggregate: 'group_party', sort: 'largest' } });
   if (/اشترينا من هاني.*ABS/.test(t)) return R({ intent: 'query', query: { entity: 'deals', kinds: ['purchase'], party: 'هاني عيسي', material: 'ABS', from: '2026-09-01', to: '2026-09-30', aggregate: 'sum' } });
+  if (/آخر المبيعات.*المشتريات/.test(t)) return R({ intent: 'query', query: { entity: 'deals', kinds: ['sale', 'purchase'], aggregate: 'list', sort: 'newest', limit: 2 } });
   if (/اللي حصل/.test(t)) return R({ intent: 'query', query: { entity: 'all', from: '2026-10-13', to: '2026-10-15', aggregate: 'list', sort: 'newest', limit: 8 } });
   if (/مخزون|عندنا .* كام/.test(t)) return R({ intent: 'query', query: { entity: 'inventory' } });
   if (/توزيع|نوزع|وزعنا/.test(t)) return R({ intent: 'query', query: { entity: 'finance', topic: 'distribution', ...(/مية ألف|100|١٠٠/.test(t) ? { amount: 100000 } : {}) } });
