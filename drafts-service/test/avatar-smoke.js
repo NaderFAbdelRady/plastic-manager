@@ -62,6 +62,13 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   assert.ok(r.j.queries[1].result.rows.every(x => x.kind === 'purchase') && r.j.queries[1].result.count === 2, 'the purchases are not pushed out by the newer sales');
   assert.ok(/المبيعات/.test(r.j.answer) && /المشتريات/.test(r.j.answer), r.j.answer); assert.strictEqual(r.j.board.blocks.length, 2); assert.deepStrictEqual(r.j.board.blocks.map(b => b.id), ['t1', 't2']);
   console.log('   both kinds:', r.j.board.blocks.map(b => b.title + ' ' + b.rows.length + ' rows').join(' | '));
+  // 6c. a story with two transactions: two drafts, each with a date and the unit in Arabic, no question about the date, both read back with weekdays
+  r = await call('/api/service/converse', { person: 'عز', text: 'اشتريت من هاني ألفين كيلو وبعت لفلكس ألف كيلو' }, KEY); assert.strictEqual(r.s, 200, JSON.stringify(r.j));
+  assert.strictEqual(r.j.records.length, 2); assert.deepStrictEqual(r.j.records.map(x => x.type), ['purchase', 'sale']);
+  assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(r.j.records[0].fields.date), 'a missing date becomes today'); assert.strictEqual(r.j.records[0].fields.unit, 'كيلوجرام', 'kg -> كيلوجرام');
+  assert.ok(/2 حركات/.test(r.j.speech) && /السبت 24\/10/.test(r.j.speech) && !/تاريخ الشراء/.test(r.j.speech), r.j.speech);
+  r = await call('/api/service/drafts', { person: 'عز', records: r.j.records, transcript: 'قصة' }, KEY); assert.strictEqual(r.s, 201); assert.strictEqual(r.j.ids.length, 2);
+  console.log('   story:', '2 drafts filed');
   // 7. pages: the avatar's door, and the classic page one click away
   const home = await fetch(B + '/').then(x => x.text()), classic = await fetch(B + '/classic').then(x => x.text());
   assert.ok(home.includes('pickClassic'), 'the door has the choice'); assert.ok(classic.includes('pm_field_code') && !classic.includes('pickClassic'), 'the classic page is the original');

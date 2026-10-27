@@ -243,7 +243,7 @@ function idle() { S.busy = false; $('hint').textContent = 'اضغط الميكر
 async function converse(payload, bubble, voice) {
   S.busy = true;
   try {
-    const pending = S.pending ? readForm() : null;
+    const pending = S.multi ? S.multi : (S.pending ? readForm() : null);
     const r = await api('/api/field/converse', { method: 'POST', body: JSON.stringify({ ...payload, conversation: S.conversation, pending, lastQuery: S.lastQuery }) });
     const heard = r.transcript || payload.text || '';
     if (voice) bubble.innerHTML = '🎤 ' + esc(heard);
@@ -256,10 +256,47 @@ async function converse(payload, bubble, voice) {
   }
   finally { idle(); }
 }
+function dayAr(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || '')); if (!m) return String(iso || ''); return ['الأحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس', 'الجمعة', 'السبت'][new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()] + ' ' + (+m[3]) + '/' + (+m[2]); }
+function sumLine(d) {
+  const f = d.fields || {}, p = [dayAr(f.date || today()), TYPE_LABEL[d.type]];
+  if (f.party) p.push(f.party);
+  if (d.type === 'purchase' || d.type === 'sale') { p.push(`${f.material || '؟'} ${f.qty ? fmtN(f.qty) + ' ' + (f.unit || '') : '؟'}`, `بسعر ${f.price || '؟'}`); if (f.paid) p.push('مدفوع ' + fmtN(f.paid)); }
+  else { if (f.amount) p.push(fmtN(f.amount) + ' جنيه'); if (f.cat) p.push(f.cat); if (f.desc || f.note) p.push(f.desc || f.note); }
+  return p.join(' · ');
+}
+// A story with several transactions: one card listing them; "ابعت الكل" files each as its own draft.
+function showMulti(recs) {
+  $('chat').querySelectorAll('.card.live').forEach(c => c.remove());
+  const c = document.createElement('div'); c.className = 'card live';
+  c.innerHTML = `<h4>📝 ${recs.length} حركات</h4><div class="sum">${recs.map((d, i) => `<div>${i + 1}) ${esc(sumLine(d))}</div>`).join('')}</div><div class="acts"><button id="mSend" class="btn btn-primary">✓ ابعت الكل للمراجعة</button><button id="mCancel" class="btn btn-danger">✗ إلغاء</button></div><div id="mErr" class="small"></div>`;
+  $('chat').appendChild(c); $('chat').scrollTop = $('chat').scrollHeight;
+  $('mSend').onclick = submitMulti; $('mCancel').onclick = () => { S.multi = null; c.remove(); say('لغيت المسودات.', 'bot', false); };
+}
+async function submitMulti() {
+  const recs = S.multi; if (!recs || !recs.length) { say('مفيش حركات معلّقة.', 'bot', false); return; }
+  $('mSend') && ($('mSend').disabled = true);
+  try {
+    for (const d of recs) await api('/api/field/drafts', { method: 'POST', body: JSON.stringify({ type: d.type, fields: d.fields, transcript: S.transcript || '', conversation: S.conversation }) });
+    $('chat').querySelectorAll('.card.live').forEach(c => c.remove());
+    S.multi = null; S.transcript = '';
+    say(`✓ ${recs.length} حركات اتبعتوا للمراجعة. تحب تسجّل حاجة تانية أو تسأل عن حاجة؟`);
+    S.conversation.push({ role: 'assistant', text: 'اتبعتت المسودات للمراجعة' });
+  } catch (e) { $('mErr') && ($('mErr').textContent = 'ما اتبعتتش: ' + e.message); $('mSend') && ($('mSend').disabled = false); }
+}
 function handle(r, heard, voice) {
   const bot = t => { if (t) S.conversation.push({ role: 'assistant', text: t }); };
   if (r.query && r.answer) showAnswer(r);
+  if (r.records && r.records.length > 1) {
+    if (!S.multi) S.transcript = heard;
+    S.multi = r.records.map(x => ({ type: x.type, fields: x.fields })); S.pending = null;
+    showMulti(S.multi);
+    const ask = r.records.find(x => x.question);
+    const t = ask ? ask.question : `فهمت ${S.multi.length} حركات — راجعهم وقول «أيوه» أو اضغط ابعت الكل.`;
+    ask ? say(t, 'bot ask') : say(t); bot(t);
+    return;
+  }
   if (r.record) {
+    S.multi = null;
     if (voice && !S.draftBlob) { S.draftBlob = voice.blob; S.draftMime = voice.mime; S.draftSecs = voice.secs; }
     if (!S.pending) S.transcript = heard; S.pending = { type: r.record.type, fields: r.record.fields };
     showDraft(S.pending, false);
@@ -268,8 +305,8 @@ function handle(r, heard, voice) {
     return;
   }
   if (r.answer) { bot(r.answer); tts(r.answer); if (r.query && r.query.structured) S.lastQuery = r.query.structured; return; }
-  if (r.kind === 'confirm') { if (S.pending) submit(); else say('مفيش حركة معلّقة أبعتها.'); return; }
-  if (r.kind === 'cancel') { S.pending = null; S.draftBlob = null; $('chat').querySelectorAll('.card.live').forEach(c => c.remove()); say('تمام، لغيتها.'); bot('لغيت المسودة'); return; }
+  if (r.kind === 'confirm') { if (S.multi) submitMulti(); else if (S.pending) submit(); else say('مفيش حركة معلّقة أبعتها.'); return; }
+  if (r.kind === 'cancel') { S.pending = null; S.multi = null; S.draftBlob = null; $('chat').querySelectorAll('.card.live').forEach(c => c.remove()); say('تمام، لغيتها.'); bot('لغيت المسودة'); return; }
   if (r.kind === 'clarify') { say(r.question || 'ممكن توضّح؟', 'bot ask'); bot(r.question); return; }
   if (r.kind === 'chat') { say(r.reply || 'أهلاً!'); bot(r.reply); return; }
   say('ما فهمتش، ممكن تعيد؟');

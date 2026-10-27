@@ -24,14 +24,22 @@ function parseScopes(s) {
 }
 const scopeFor = (scopes, name) => scopes[name] || new Set(DEFAULT_SCOPES);
 
+// '2026-10-24' -> 'السبت 24/10': a date that is read out or shown always carries its weekday (Friday and Saturday are different days).
+const WEEKDAYS = ['الأحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس', 'الجمعة', 'السبت'];
+function dayLabel(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  if (!m) return String(iso || '');
+  return `${WEEKDAYS[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()]} ${+m[3]}/${+m[2]}`;
+}
+
 const KIND_AR = { purchase: 'شراء', sale: 'بيع', collection: 'تحصيل', supplierPay: 'دفعة لمورد', expense: 'مصروف' };
 
 function rowsFor(entity, snap, allowed) {
   const out = [];
   const add = (scope, arr, map) => { if (allowed.has(scope)) (arr || []).forEach(r => out.push(map(r))); };
-  const deal = r => ({ date: r.date, kind: r.kind, party: r.party, material: r.material, qty: r.qty, unit: r.unit, price: r.price, amount: r.net, paid: r.paid, remaining: r.remaining, text: r.text || '' });
-  const money = r => ({ date: r.date, kind: r.kind, party: r.party, amount: r.amount, text: r.note || '' });
-  const exp = r => ({ date: r.date, kind: 'expense', party: '', material: '', amount: r.amount, text: [r.cat, r.desc].filter(Boolean).join(' · ') });
+  const deal = r => ({ date: r.date, day: dayLabel(r.date), kind: r.kind, party: r.party, material: r.material, qty: r.qty, unit: r.unit, price: r.price, amount: r.net, paid: r.paid, remaining: r.remaining, text: r.text || '' });
+  const money = r => ({ date: r.date, day: dayLabel(r.date), kind: r.kind, party: r.party, amount: r.amount, text: r.note || '' });
+  const exp = r => ({ date: r.date, day: dayLabel(r.date), kind: 'expense', party: '', material: '', amount: r.amount, text: [r.cat, r.desc].filter(Boolean).join(' · ') });
   if (entity === 'deals' || entity === 'all') add('deals', snap.deals, deal);
   if (entity === 'money' || entity === 'all') add('money', snap.money, money);
   if (entity === 'expenses' || entity === 'all') add('expenses', snap.expenses, exp);
@@ -131,7 +139,9 @@ function fallbackAnswer(res, asOf) {
   if (!res.count) return 'مفيش حركات مطابقة للسؤال ده' + when;
   if (res.aggregate === 'sum' || res.aggregate === 'count') return `${res.count} حركة، إجمالي ${fmtN(res.totalAmount)} جنيه${res.totalQty ? ` وإجمالي كمية ${fmtN(res.totalQty)}` : ''}${when}`;
   if (res.groups) return res.groups.slice(0, 5).map(g => `${g.key}: ${fmtN(g.amount)} جنيه (${g.count})`).join('، ') + when;
-  return `لقيت ${res.count} حركة، دي أحدث ${res.rows.length}${when}`;
+  const line = r => `${r.day || r.date} ${r.kindAr || r.kind}${r.party ? ' ' + r.party : ''}${r.material ? ' ' + r.material + (r.qty ? ' ' + fmtN(r.qty) : '') : ''} ${fmtN(r.amount)} جنيه`;
+  const nTx = res.count === 1 ? 'حركة' : res.count === 2 ? 'حركتين' : res.count <= 10 ? `${res.count} حركات` : `${res.count} حركة`;
+  return `لقيت ${nTx}، أحدثهم: ${res.rows.slice(0, 3).map(line).join('، ')}${when}`;
 }
 function financeAnswer(res, when) {
   if (res.noFinance) return 'المكتب لسه ما رفعش الماليات للميدان.' + when;
@@ -151,4 +161,4 @@ function balPhrase(r) {
   if (r.side === 'customers') return v > 0 ? `عليه ${fmtN(v)}` : `ليه علينا ${fmtN(-v)}`;
   return v > 0 ? `ليه علينا ${fmtN(v)}` : `ليه عندنا مقدم ${fmtN(-v)}`;
 }
-module.exports = { SCOPES, DEFAULT_SCOPES, parseScopes, scopeFor, runQuery, fallbackAnswer, balPhrase, norm, nameMatch, KIND_AR };
+module.exports = { dayLabel, SCOPES, DEFAULT_SCOPES, parseScopes, scopeFor, runQuery, fallbackAnswer, balPhrase, norm, nameMatch, KIND_AR };

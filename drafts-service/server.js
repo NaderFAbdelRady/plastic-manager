@@ -279,11 +279,15 @@ const CONVERSE_SCHEMA = {
     transcript: { type: 'STRING' },
     intent: { type: 'STRING', enum: ['record', 'query', 'both', 'confirm', 'cancel', 'clarify', 'chat'] },
     confidence: { type: 'NUMBER' },
-    draft: {
-      type: 'OBJECT',
-      properties: {
-        type: { type: 'STRING', enum: DRAFT_TYPES }, fields: PARSE_SCHEMA.properties.fields,
-        missing: { type: 'ARRAY', items: { type: 'STRING' } }, question: { type: 'STRING' }, reply: { type: 'STRING' },
+    drafts: {                                          // one draft per transaction: a story can hold several (a purchase, a sale, a payment, three expenses ...)
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          type: { type: 'STRING', enum: DRAFT_TYPES }, fields: PARSE_SCHEMA.properties.fields,
+          missing: { type: 'ARRAY', items: { type: 'STRING' } }, question: { type: 'STRING' }, reply: { type: 'STRING' },
+        },
+        required: ['type', 'fields'],
       },
     },
     query: QUERY_SCHEMA,
@@ -321,8 +325,14 @@ function conversePrompt({ ref, fieldName, allowed, pending, lastQuery, asOf }) {
 للماليات (لو مسموح): entity=finance مع topic: cash (الخزنة/السيولة)، profit (الأرباح وصافي الربح والمتاح للتوزيع)، balance_sheet (الميزانية: خزنة وذمم ومخزون وحقوق ملكية)، distribution (توزيع الأرباح: لو ذكر مبلغ حطه في amount، وإلا هيتحسب على المتاح للتوزيع)، partners (الشركاء ونسبهم وسحوباتهم وتمويلهم)، pl (الأرباح والخسائر بالشهور، مع from/to)، closings (التقفيلات). 
 للـ query: entity = deals للمشتريات والمبيعات، money للتحصيلات ودفعات الموردين، expenses للمصروفات، balances للأرصدة (balanceSide: customers = اللي علينا عندهم، suppliers = اللي لهم علينا)، inventory للمخزون، all لـ"إيه اللي حصل". kinds لو حدد نوع. party/material بالأسماء من القوائم. aggregate: list لقائمة، sum لإجمالي، count لعدد، group_party/group_day/group_material للتجميع. sort: newest افتراضي، largest لـ"أكبر". "حساب فلان" = entity balances و party فلان.
 ${lastQuery ? `آخر سؤال في المحادثة كان: ${JSON.stringify(lastQuery)} — لو الجملة الحالية متابعة ("وجمال؟" "والشهر اللي قبله؟") عدّل عليه بس.` : ''}
-${pending ? `في مسودة حركة معلّقة قدامه دلوقتي: ${JSON.stringify(pending)}. لو بيصلّح فيها ("لأ خليها آجل") رجّع intent=record بالمسودة كاملة محدّثة. لو بيوافق intent=confirm. لو بيرفض intent=cancel.` : 'مفيش مسودة معلّقة: confirm و cancel مالهمش معنى، استخدم clarify أو chat.'}
+${pending ? `في مسودة حركة معلّقة قدامه دلوقتي: ${JSON.stringify(pending)}. لو بيصلّح فيها ("لأ خليها آجل") رجّع intent=record بكل المسودات كاملة محدّثة. لو بيوافق intent=confirm. لو بيرفض intent=cancel.` : 'مفيش مسودة معلّقة: confirm و cancel مالهمش معنى، استخدم clarify أو chat.'}
 
+لو الكلام حدوتة فيها أكتر من حركة (شراء وبيع ودفعة ومصاريف في نفس الرسالة): طلّع drafts كلها مرة واحدة، draft لكل حركة لوحدها.
+- كل شراء أو بيع draft (مورد/عميل واحد، خامة واحدة). لو اشترى خامتين من نفس المورد أو من موردين اتنين = drafts منفصلة.
+- كل مصروف draft من نوع expense (نقل ٥٠٠ وعمالة ٣٠٠ = اتنين). مصاريف الصفقة نفسها (نقل الشحنة) بتتحط في txExpenses بتاعة الشراء أو البيع، مش لوحدها.
+- «دفعت لهاني ٣٠ ألف» = supplierPay، «قبضت من فلكس ١٠ آلاف» = collection؛ ودي مش بتتحط في paid بتاع شراء إلا لو قال إنها دفعة نفس الصفقة.
+- لا تدمج حركتين في draft ولا تخترع اسم ولا رقم؛ لو في حركة ناقصة حاجة أساسية حط missing/question عليها بس وكمّل الباقي.
+- التقويم (آخر ١٤ يوم): ${Array.from({ length: 14 }, (_, i) => { const d = new Date(Date.now() - i * 864e5); return `${Q.dayLabel(d.toISOString().slice(0, 10)).split(' ')[0]} = ${d.toISOString().slice(0, 10)}`; }).join('، ')}. أي يوم بالاسم («الخميس اللي فات») خده من التقويم ده.
 لـ record: قواعد الأرقام: حوّل الأرقام المنطوقة لأرقام (ألفين وسبعين = 2070، تلاتين ألف = 30000). الوحدة الافتراضية كيلوجرام والسعر للكيلو. paid هو الكاش المدفوع في نفس الحركة؛ "آجل" أو "على الحساب" = 0؛ لو ما ذكرش الدفع اسأل. txExpenses مصاريف الصفقة. الحقول الأساسية: purchase/sale: party, material, qty, price, paid. expense: cat, amount. collection/supplierPay: party, amount. لو في حقل أساسي ناقص حطه في draft.missing واكتب draft.question سؤال واحد بالعامية. لو مفيش ناقص: draft.question نص فاضي و draft.reply جملة بتلخص الحركة علشان يأكد. لا تخترع أرقام أو أسماء.
 transcript = النص المنطوق كما قيل بدون تعديل.`;
 }
@@ -333,8 +343,14 @@ const jsonSchemaOf = x => Array.isArray(x) ? x.map(jsonSchemaOf) : (x && typeof 
 async function grokCall({ system, turns, json, maxTokens = 2048 }) {
   const messages = [{ role: 'system', content: system }, ...turns.map(t => ({ role: t.role === 'assistant' ? 'assistant' : 'user', content: t.text }))];
   const body = { model: XAI_MODEL, messages, temperature: 0.2, max_tokens: maxTokens, ...(json ? { response_format: { type: 'json_object' } } : {}) };
-  const r = await fetch(`${XAI_BASE}/v1/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + XAI_API_KEY }, body: JSON.stringify(body) });
-  const j = await r.json().catch(() => ({}));
+  let r, j;
+  for (let attempt = 0; attempt < 3; attempt++) {                                      // a rate limit (tokens per minute) says how long to wait: wait that, twice at most
+    r = await fetch(`${XAI_BASE}/v1/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + XAI_API_KEY }, body: JSON.stringify(body) });
+    j = await r.json().catch(() => ({}));
+    if (r.status !== 429 || attempt === 2) break;
+    const m = /try again in ([\d.]+)s/i.exec(JSON.stringify(j)), ra = +r.headers.get('retry-after');
+    await new Promise(res => setTimeout(res, Math.min(20000, ((m ? +m[1] : ra) || 8) * 1000 + 500)));
+  }
   if (!r.ok) throw new Error((j.error && (j.error.message || j.error)) || (j.code ? String(j.code) : `Grok HTTP ${r.status}`));
   return String(((((j.choices || [])[0] || {}).message || {}).content) || '').replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
 }
@@ -403,7 +419,7 @@ async function phraseAnswer(question, query, result, asOf) {
   if (result.denied || !AI_ON) return fallback;
   try {
     const compact = { count: result.count, totalAmount: result.totalAmount, totalQty: result.totalQty, topic: result.topic, data: result.data, rows: (result.rows || []).slice(0, 15), groups: (result.groups || []).slice(0, 10) };
-    const sys = 'أنت بترد على موظف ميداني في تجارة بلاستيك بالعامية المصرية في جملتين تلاتة بالكتير. استخدم الأرقام اللي في النتيجة بالحرف ولا تحسب ولا تخمّن أي رقم جديد. لو النتيجة فاضية قول كده. الأرقام بالجنيه. في الآخر اذكر آخر تحديث للبيانات. للأرصدة: customers والرقم موجب = العميل عليه فلوس لنا، suppliers والرقم موجب = إحنا علينا فلوس للمورد، السالب العكس. رد نص عادي من غير markdown.';
+    const sys = 'أنت بترد على موظف ميداني في تجارة بلاستيك بالعامية المصرية في جملتين تلاتة بالكتير. استخدم الأرقام اللي في النتيجة بالحرف ولا تحسب ولا تخمّن أي رقم جديد. التواريخ قولها باسم اليوم زي الحقل day (مثلاً «السبت 24/10») مش بالأرقام بس. لو النتيجة فاضية قول كده. الأرقام بالجنيه. في الآخر اذكر آخر تحديث للبيانات. للأرصدة: customers والرقم موجب = العميل عليه فلوس لنا، suppliers والرقم موجب = إحنا علينا فلوس للمورد، السالب العكس. رد نص عادي من غير markdown.';
     const usr = `السؤال: ${question}\nالاستعلام: ${JSON.stringify(query)}\nالنتيجة: ${JSON.stringify(compact)}\nآخر تحديث: ${asOf || 'غير معروف'}`;
     const txt = PROVIDER !== 'gemini'
       ? await textCall({ system: sys, turns: [{ role: 'user', text: usr }], json: false, maxTokens: 400 })
@@ -515,6 +531,26 @@ app.post('/api/field/parse', fieldAuth, limit(30), wrap(async (req, res) => {
   res.json({ ok: true, result });
 }));
 // The single entry point for the capture page: the person just talks; the model decides record / query / confirm / ...
+// A draft as the model describes it, made fit for the page and the review inbox: a date (today when none was said), the unit in the office's words, and no question about
+// what is not essential (the date, whether it was paid): only a missing party / material / quantity / price / amount is worth stopping the person for.
+const UNIT_AR = { kg: 'كيلوجرام', kgs: 'كيلوجرام', kilo: 'كيلوجرام', kilogram: 'كيلوجرام', kilograms: 'كيلوجرام', 'كيلو': 'كيلوجرام', 'كجم': 'كيلوجرام', 'كيلوجرام': 'كيلوجرام', 'كيلوغرام': 'كيلوجرام',
+  ton: 'طن', tons: 'طن', tonne: 'طن', 'طن': 'طن', 'أطنان': 'طن' };
+const cairoToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+function essentialMissing(type, f) {
+  const pos = v => Number.isFinite(+v) && +v > 0;
+  if (type === 'purchase' || type === 'sale') return !f.party || !f.material || !pos(f.qty) || !pos(f.price);
+  if (type === 'expense') return !pos(f.amount);
+  return !f.party || !pos(f.amount);                                                    // collection / supplierPay
+}
+function cleanDraft(d) {
+  const f = (d.fields && typeof d.fields === 'object') ? { ...d.fields } : {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(f.date || ''))) f.date = cairoToday();
+  if (f.unit) f.unit = UNIT_AR[String(f.unit).trim().toLowerCase()] || UNIT_AR[String(f.unit).trim()] || f.unit;
+  else if (d.type === 'purchase' || d.type === 'sale') f.unit = 'كيلوجرام';
+  const stop = essentialMissing(d.type, f);
+  return { type: d.type, fields: f, missing: Array.isArray(d.missing) ? d.missing : [], question: stop ? String(d.question || '').trim() : '', reply: String(d.reply || '').trim() };
+}
+
 async function converseFor(fieldName, body) {
   if (!AI_ON) { const e = new Error('الذكاء الاصطناعي مش متفعّل على الخدمة'); e.status = 503; throw e; }
   const { text, audio, mime, conversation, pending, lastQuery } = body || {};
@@ -523,20 +559,22 @@ async function converseFor(fieldName, body) {
   const allowed = scopesOf(fieldName), asOf = asOfText(snapRec);
   const u = await geminiConverse({ text, audio: audioB64, mime, conversation, ctx: { ref: reference, fieldName, allowed, pending: pending || null, lastQuery: lastQuery || null, asOf } });
   const out = { kind: u.intent, transcript: String(u.transcript || text || '').trim(), confidence: u.confidence };
-  if ((u.intent === 'record' || u.intent === 'both') && u.draft && DRAFT_TYPES.includes(u.draft.type)) {
-    const d = u.draft;
-    out.record = { type: d.type, fields: (d.fields && typeof d.fields === 'object') ? d.fields : {}, missing: Array.isArray(d.missing) ? d.missing : [], question: String(d.question || '').trim(), reply: String(d.reply || '').trim() };
+  const drafts = (Array.isArray(u.drafts) ? u.drafts : []).concat(u.draft ? [u.draft] : []).filter(d => d && DRAFT_TYPES.includes(d.type)).slice(0, 8);      // (a model that sends the old single `draft` still works)
+  if ((u.intent === 'record' || u.intent === 'both') && drafts.length) {
+    out.records = drafts.map(cleanDraft);
+    out.record = out.records[0];                       // (the classic page's single card)
   } else if (u.intent === 'record' || u.intent === 'both') { out.kind = u.intent === 'both' ? 'query' : 'clarify'; out.question = 'مش فاهم الحركة قصدك إيه، ممكن تعيدها؟'; }
   if ((u.intent === 'query' || u.intent === 'both') && u.query) {
-    const parts = await Promise.all(planQueries(u.query, u.more_queries).map(async p => {
+    const plan = planQueries(u.query, u.more_queries);
+    const parts = await Promise.all(plan.map(async p => {
       const result = snapRec ? Q.runQuery(p.q, snapRec.data, allowed) : { entity: p.q.entity || 'all', rows: [], count: 0, noSnapshot: true };
-      const answer = snapRec ? await phraseAnswer(out.transcript, p.q, result, asOf) : 'لسه المكتب ما رفعش بيانات للميدان.';
+      const answer = !snapRec ? 'لسه المكتب ما رفعش بيانات للميدان.' : (plan.length > 1 ? Q.fallbackAnswer(result, '') : await phraseAnswer(out.transcript, p.q, result, asOf));      // several answers in one breath stay short and exact: no model re-wording
       store.logQuery({ askedBy: fieldName, intent: u.intent, question: out.transcript, query: p.q, answer, asOf, denied: !!result.denied }).catch(e => console.error('log', e.message));
       return { structured: p.q, result, asOf, label: p.label, answer };
     }));
     out.query = { structured: parts[0].structured, result: parts[0].result, asOf };
     if (parts.length > 1) out.queries = parts.map(({ structured, result, label }) => ({ structured, result, asOf, label }));
-    out.answer = parts.length === 1 ? parts[0].answer : parts.map(p => (p.label ? p.label + ': ' : '') + p.answer).join(' ');
+    out.answer = parts.length === 1 ? parts[0].answer : parts.map(p => (p.label ? 'آخر ' + p.label + ': ' : '') + p.answer).join('. ') + (asOf ? ` (حسب آخر تحديث من المكتب: ${asOf})` : '');
   }
   if (u.intent === 'clarify') out.question = String(u.question || 'ممكن توضّح أكتر؟').trim();
   if (u.intent === 'chat') out.reply = String(u.reply || 'أهلاً! قولّي حركة تسجلها أو اسأل عن أي حاجة.').trim();
@@ -582,11 +620,13 @@ function serviceAuth(req, res, next) {
 }
 const SCOPE_LABEL = { deals: 'الصفقات', money: 'الفلوس والأرصدة', expenses: 'المصروفات', inventory: 'المخزون', finance: 'الماليات' };
 app.post('/api/service/converse', serviceAuth, limit(60), wrap(async (req, res) => {
-  const b = req.body || {}, pending = Array.isArray(b.pending) ? b.pending[0] : b.pending;       // the avatar holds a list of records; this service has one draft at a time
+  const b = req.body || {}, pending = Array.isArray(b.pending) ? (b.pending.length > 1 ? b.pending : b.pending[0]) : b.pending;       // the avatar holds a list of records
   const out = await converseFor(req.fieldName, { text: b.text, conversation: b.conversation, pending: pending || null, lastQuery: b.lastQuery });
-  out.records = out.record ? [{ type: out.record.type, fields: out.record.fields }] : [];
+  const speechRecs = out.records || [];
+  out.records = speechRecs.map(r => ({ type: r.type, fields: r.fields }));
+  out.recordNotes = speechRecs;
   const board = AS.boardFor(out); if (board) out.board = board;
-  out.speech = AS.speechFor(out, !!pending);
+  out.speech = AS.speechFor({ ...out, records: speechRecs }, !!pending);
   res.json(out);
 }));
 app.post('/api/service/brief', serviceAuth, wrap(async (req, res) => {

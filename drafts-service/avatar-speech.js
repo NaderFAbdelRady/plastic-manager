@@ -4,17 +4,9 @@
 
 const Q = require('./query-engine');
 
-const WEEKDAYS = ['الأحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس', 'الجمعة', 'السبت'];      // Date#getUTCDay(): Sunday = 0
+const dayLabel = Q.dayLabel;
 const TYPE_LABEL = { purchase: 'شراء', sale: 'بيع', expense: 'مصروف', collection: 'تحصيل', supplierPay: 'دفعة لمورد' };
 const fmtN = n => Math.round(+n || 0).toLocaleString('en-US');
-
-// '2026-10-24' -> 'السبت 24/10'
-function dayLabel(iso) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
-  if (!m) return String(iso || '');
-  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
-  return `${WEEKDAYS[d.getUTCDay()]} ${+m[3]}/${+m[2]}`;
-}
 
 // Spoken text: no emoji, bullets or line breaks.
 const plain = t => String(t || '').replace(/[☀-➿\u{1f300}-\u{1faff}⭐️]/gu, '').replace(/\s*\n+\s*/g, '. ').replace(/•/g, '').replace(/\s+/g, ' ').trim();
@@ -42,11 +34,11 @@ function speechFor(out, hadPending) {
   const parts = [];
   if (out.kind === 'confirm') return hadPending ? '' : 'مفيش حركة معلّقة أبعتها. قولّي إيه اللي حصل.';
   if (out.kind === 'cancel') return 'تمام، لغيتها. قولّي من الأول.';
-  const rec = out.record;
-  if (rec) {
-    if (rec.question) parts.push(rec.question);
-    else parts.push(`هسجّل: ${describeRecord(rec)}. أبعتها للمراجعة؟`);
-  }
+  const recs = out.records && out.records.length ? out.records : (out.record ? [out.record] : []);
+  const ask = recs.find(r => r.question);
+  if (ask) parts.push(ask.question);
+  else if (recs.length === 1) parts.push(`هسجّل: ${describeRecord(recs[0])}. أبعتها للمراجعة؟`);
+  else if (recs.length > 1) parts.push(`هسجّل ${recs.length === 2 ? "حركتين" : recs.length + " حركات"}: ` + recs.map((r, i) => `${i + 1}) ${describeRecord(r)}`).join('؛ ') + '. أبعتهم كلهم للمراجعة؟');
   if (out.answer) parts.push(out.answer);
   if (out.board) parts.push('وده الجدول قدامك على الشاشة.');
   if (out.kind === 'chat' && out.reply) parts.push(out.reply);

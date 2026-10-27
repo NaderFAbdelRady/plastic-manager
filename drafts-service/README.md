@@ -98,6 +98,15 @@ set `GEMINI_API_KEY` to enable the voice / free-text understanding.
 The free Render instance sleeps after 15 minutes idle; the first request afterwards takes ~30 s.
 Neon's free tier keeps the data (unlike Render's free Postgres, which expires after 90 days).
 
+## Stories: several transactions in one message
+
+The person usually tells a story, not one item at a time: «اشتريت من هاني ألفين كيلو ABS وبعت لفلكس ألف كيلو PP ودفعت لجمال ٢٠ ألف». `converse` returns **one draft per
+transaction** (`records`; `record` is the first, for the classic page's single card): the classic page shows one card listing them with «ابعت الكل للمراجعة», the avatar reads
+them back one by one. A draft always has a date (today when none was said) and the unit in the office's words, and the model is only allowed to stop the person for something
+essential (party, material, quantity, price, amount) — not for the date or whether it was paid. One sentence can also ask for several things («آخر المبيعات وآخر المشتريات»):
+each gets its own query, its own answer and its own table. Every date that is read out carries its weekday («الخميس 22/10»), and the prompt carries a 14-day calendar so
+«الخميس اللي فات» resolves exactly. `node test/story-check.js` runs ten such stories through the service with a real model against a synthetic office.
+
 ## The avatar (Matrix) — optional
 
 With the four variables below set, the page people open (`/`) shows a short choice after the code is accepted: **مساعدة المكتب (the avatar)** or **the classic page**
