@@ -331,15 +331,15 @@ function showAnswerOne(r, label, last) {
     if (res.rows && res.rows.length && res.topic === 'distribution') tbl += th(['الشريك', 'نصيبه', 'سحوبات مخصومة', 'يستلم']) + res.rows.map(x => td([x.party, fmtN(x.gross), fmtN(x.absorbed), fmtN(x.net)])).join('');
     else if (res.rows && res.rows.length && res.topic === 'partners') tbl += th(['الشريك', 'النسبة', 'سحوبات', 'تمويل له']) + res.rows.map(x => td([x.name, x.sharePct + '%', fmtN(x.draws), fmtN(x.loan)])).join('');
     else if (res.rows && res.rows.length && res.topic === 'pl') tbl += th(['الشهر', 'مبيعات', 'مصروفات', 'صافي']) + res.rows.map(x => td([x.month, fmtN(x.revenue), fmtN(x.expenses), fmtN(x.net)])).join('');
-    else if (res.rows && res.rows.length && res.topic === 'closings') tbl += th(['التقفيل', 'الربح', 'الخزنة']) + res.rows.map(x => td([x.date, fmtN(x.net), fmtN(x.cash)])).join('');
+    else if (res.rows && res.rows.length && res.topic === 'closings') tbl += th(['التقفيل', 'الربح', 'الخزنة']) + res.rows.map(x => td([dayAr(x.date), fmtN(x.net), fmtN(x.cash)])).join('');
   } else if (res.entity === 'finance' && res.rows && res.rows.length) {
     if (res.topic === 'partners') tbl = th(['الشريك', 'النسبة', 'سحوبات', 'تمويل له']) + res.rows.map(x => td([x.name, x.sharePct + '%', fmtN(x.draws), fmtN(x.loan)])).join('');
-    else if (res.topic === 'closings') tbl = th(['التقفيل', 'الربح', 'الخزنة']) + res.rows.map(x => td([x.date, fmtN(x.net), fmtN(x.cash)])).join('');
+    else if (res.topic === 'closings') tbl = th(['التقفيل', 'الربح', 'الخزنة']) + res.rows.map(x => td([dayAr(x.date), fmtN(x.net), fmtN(x.cash)])).join('');
   }
   else if (res.entity === 'balances' && res.rows && res.rows.length) tbl = th(['الاسم', 'النوع', 'الرصيد']) + res.rows.slice(0, 12).map(x => td([x.party, x.side === 'customers' ? 'عميل' : 'مورد', balText(x)])).join('');
   else if (res.entity === 'inventory' && res.rows && res.rows.length) tbl = th(['الخامة', 'المخزون']) + res.rows.slice(0, 15).map(x => td([x.material, fmtN(x.stock) + ' ' + (x.unit || 'كجم')])).join('');
   else if (res.groups && res.groups.length) tbl = th(['', 'الإجمالي', 'العدد']) + res.groups.slice(0, 12).map(g => td([g.key, fmtN(g.amount), g.count])).join('');
-  else if (res.rows && res.rows.length) tbl = th(['التاريخ', 'النوع', 'الطرف', 'التفاصيل', 'المبلغ']) + res.rows.slice(0, 15).map(x => td([x.date, x.kindAr || x.kind, x.party || '', x.material ? (x.material + (x.qty ? ' ' + fmtN(x.qty) : '')) : (x.text || ''), fmtN(x.amount)])).join('');
+  else if (res.rows && res.rows.length) tbl = th(['التاريخ', 'النوع', 'الطرف', 'التفاصيل', 'المبلغ']) + res.rows.slice(0, 15).map(x => td([x.day || dayAr(x.date), x.kindAr || x.kind, x.party || '', x.material ? (x.material + (x.qty ? ' ' + fmtN(x.qty) : '')) : (x.text || ''), fmtN(x.amount)])).join('');
   if (tbl) html += '<table class="res">' + tbl + '</table>';
   if (last && r.query.asOf) html += `<div class="asof">حسب آخر تحديث من المكتب: ${esc(r.query.asOf)}</div>`;
   add('bot', html);
@@ -403,7 +403,7 @@ function readForm() {
 function refreshSum() {
   if (!$('dSum')) return; const { type, fields: f } = readForm();
   $('dTitle').textContent = TYPE_LABEL[type];
-  const parts = [`<b>${esc(f.date)}</b>`];
+  const parts = [`<b>${esc(dayAr(f.date))}</b>`];
   if (f.party) parts.push(esc(f.party));
   if (type === 'purchase' || type === 'sale') { parts.push(`${esc(f.material || '؟')} ${f.qty ? fmtN(f.qty) + ' ' + esc(f.unit) : '؟'}`); parts.push(`بسعر ${f.price || '؟'}`); const tot = (f.qty || 0) * (f.price || 0); if (tot) parts.push(`الإجمالي ${fmtN(tot)}`); parts.push(f.paid ? `مدفوع ${fmtN(f.paid)}` : 'آجل'); if (f.txExpenses && f.txExpenses.length) parts.push('مصاريف ' + f.txExpenses.map(e => esc(e.desc) + ' ' + fmtN(e.amount)).join('، ')); if (f.location) parts.push('📍 ' + esc(f.location)); }
   else { parts.push(`المبلغ ${f.amount ? fmtN(f.amount) : '؟'}`); if (f.cat) parts.push(esc(f.cat)); if (f.desc || f.note) parts.push(esc(f.desc || f.note)); }
@@ -435,7 +435,7 @@ $('mine').onclick = async () => {
   try {
     const rows = await api('/api/field/drafts'); const st = { pending: 'في المراجعة', approved: 'اتعتمدت', rejected: 'مرفوضة' };
     add('bot', '<b>مسوداتي</b><div class="list">' + (rows.length ? rows.map(d => { const f = d.fields || {}, sum = [f.party, f.material, f.qty ? f.qty + ' ' + (f.unit || '') : '', f.amount ? f.amount + ' ج' : '', f.desc].filter(Boolean).join(' · ');
-      return `<div class="item"><div><b>${esc(TYPE_LABEL[d.type] || d.type)}</b> ${esc(sum)}<div class="small">${esc(new Date(d.createdAt).toLocaleString('ar-EG'))}${d.reviewNote ? ' · ' + esc(d.reviewNote) : ''}</div></div><span class="badge b-${esc(d.status)}">${st[d.status] || d.status}</span></div>`; }).join('') : '<div class="small">لسه ما بعتش حاجة</div>') + '</div>');
+      return `<div class="item"><div><b>${esc(TYPE_LABEL[d.type] || d.type)}</b> ${esc(sum)}<div class="small">${esc(dayAr(String(d.createdAt).slice(0, 10)))} ${esc(new Date(d.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }))}${d.reviewNote ? ' · ' + esc(d.reviewNote) : ''}</div></div><span class="badge b-${esc(d.status)}">${st[d.status] || d.status}</span></div>`; }).join('') : '<div class="small">لسه ما بعتش حاجة</div>') + '</div>');
   } catch (e) { add('err', esc('ما قدرتش أجيب القائمة: ' + e.message)); }
 };
 
