@@ -66,7 +66,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   r = await call('/api/service/converse', { person: 'عز', text: 'اشتريت من هاني ألفين كيلو وبعت لفلكس ألف كيلو' }, KEY); assert.strictEqual(r.s, 200, JSON.stringify(r.j));
   assert.strictEqual(r.j.records.length, 2); assert.deepStrictEqual(r.j.records.map(x => x.type), ['purchase', 'sale']);
   assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(r.j.records[0].fields.date), 'a missing date becomes today'); assert.strictEqual(r.j.records[0].fields.unit, 'كيلوجرام', 'kg -> كيلوجرام');
-  assert.ok(/2 حركات/.test(r.j.speech) && /السبت 24\/10/.test(r.j.speech) && !/تاريخ الشراء/.test(r.j.speech), r.j.speech);
+  assert.ok(/حركتين/.test(r.j.speech) && /السبت 24\/10/.test(r.j.speech) && !/تاريخ الشراء/.test(r.j.speech), r.j.speech);
   r = await call('/api/service/drafts', { person: 'عز', records: r.j.records, transcript: 'قصة' }, KEY); assert.strictEqual(r.s, 201); assert.strictEqual(r.j.ids.length, 2);
   console.log('   story:', '2 drafts filed');
   // 7. pages: the avatar's door, and the classic page one click away

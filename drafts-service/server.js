@@ -536,19 +536,25 @@ app.post('/api/field/parse', fieldAuth, limit(30), wrap(async (req, res) => {
 const UNIT_AR = { kg: 'كيلوجرام', kgs: 'كيلوجرام', kilo: 'كيلوجرام', kilogram: 'كيلوجرام', kilograms: 'كيلوجرام', 'كيلو': 'كيلوجرام', 'كجم': 'كيلوجرام', 'كيلوجرام': 'كيلوجرام', 'كيلوغرام': 'كيلوجرام',
   ton: 'طن', tons: 'طن', tonne: 'طن', 'طن': 'طن', 'أطنان': 'طن' };
 const cairoToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
-function essentialMissing(type, f) {
-  const pos = v => Number.isFinite(+v) && +v > 0;
-  if (type === 'purchase' || type === 'sale') return !f.party || !f.material || !pos(f.qty) || !pos(f.price);
-  if (type === 'expense') return !pos(f.amount);
-  return !f.party || !pos(f.amount);                                                    // collection / supplierPay
+function essentialGaps(type, f) {
+  const pos = v => Number.isFinite(+v) && +v > 0, gaps = [];
+  if (type === 'purchase' || type === 'sale') {
+    if (!f.party) gaps.push(type === 'sale' ? 'العميل' : 'المورد');
+    if (!f.material) gaps.push('الخامة');
+    if (!pos(f.qty)) gaps.push('الكمية');
+    if (!pos(f.price)) gaps.push('السعر');
+  } else if (type === 'expense') { if (!pos(f.amount)) gaps.push('المبلغ'); }
+  else { if (!f.party) gaps.push(type === 'collection' ? 'العميل' : 'المورد'); if (!pos(f.amount)) gaps.push('المبلغ'); }   // collection / supplierPay
+  return gaps;
 }
+const essentialMissing = (type, f) => essentialGaps(type, f).length > 0;
 function cleanDraft(d) {
   const f = (d.fields && typeof d.fields === 'object') ? { ...d.fields } : {};
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(f.date || ''))) f.date = cairoToday();
   if (f.unit) f.unit = UNIT_AR[String(f.unit).trim().toLowerCase()] || UNIT_AR[String(f.unit).trim()] || f.unit;
   else if (d.type === 'purchase' || d.type === 'sale') f.unit = 'كيلوجرام';
   const stop = essentialMissing(d.type, f);
-  return { type: d.type, fields: f, missing: Array.isArray(d.missing) ? d.missing : [], question: stop ? String(d.question || '').trim() : '', reply: String(d.reply || '').trim() };
+  return { type: d.type, fields: f, missing: Array.isArray(d.missing) ? d.missing : [], question: stop ? 'محتاج ' + essentialGaps(d.type, f).join(' و') + '.' : '', reply: String(d.reply || '').trim() };
 }
 
 async function converseFor(fieldName, body) {
