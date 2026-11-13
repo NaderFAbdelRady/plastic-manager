@@ -48,6 +48,8 @@ const snap = {
   check('who we are late with: the suppliers side', r.count === 1 && r.rows[0].overdue === 90000 && r.rows[0].days === 70, r);
   r = Q.runQuery({ entity: 'balances', overdueOnly: true }, { ...snap, balances: { customers: [{ name: 'x', balance: 5 }], suppliers: [] } }, all);
   check('an older snapshot without ages says so instead of "nobody is late"', /أعمار الديون/.test(Q.fallbackAnswer(r, '')), Q.fallbackAnswer(r, ''));
+  r = Q.runQuery({ entity: 'balances', overdueOnly: true, balanceSide: 'customers', today: 'tomorrow' }, snap, all);
+  check('round 2: a "today" that is not a date falls back to the Cairo date (no NaN ages)', r.count === 2 && r.rows.every(x => Number.isFinite(x.days) && x.days > 0) && !/NaN/.test(Q.fallbackAnswer(r, '')), r.rows);
   check('who is late needs the money scope', Q.runQuery({ entity: 'balances', overdueOnly: true }, snap, new Set(['deals'])).denied === true);
   r = Q.runQuery({ entity: 'balances', party: 'مصنع النور' }, snap, all);
   check('a supplier we overpaid now owes us: the wording says so', /لينا عنده 2,500/.test(Q.fallbackAnswer(r, '')), Q.fallbackAnswer(r, ''));

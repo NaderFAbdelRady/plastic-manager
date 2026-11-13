@@ -55,7 +55,8 @@ def main():
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(channel='chrome', headless=True)
-            ctx = browser.new_context(viewport={'width': 1366, 'height': 860}, locale='ar-EG', device_scale_factor=1.5)
+            ctx = browser.new_context(viewport={'width': 1366, 'height': 860}, locale='ar-EG', device_scale_factor=1.5,
+                                      forced_colors='none', color_scheme='light')   # a Windows contrast theme on the machine must not repaint the guide's pictures
             # only this machine: the app, the service and nothing else
             ctx.route('**/*', lambda r: r.continue_() if r.request.url.startswith(('http://127.0.0.1:', 'http://localhost:')) else r.abort())
             page = ctx.new_page()
@@ -154,12 +155,24 @@ def main():
             page.evaluate('toggleTheme()')
             shot('26_dark_dashboard', view('dashboard'), wait=600)
             page.evaluate('toggleTheme()')
+            # round 2: a customer credit limit (form, follow-up item, warning in the sale form)
+            c3 = ledger['customers'][3]['id']
+            shot('31_credit_limit_form', f'(() => {{ openEditModal("customer", DB.customers.find(c => c.id === {c3})); DB.form.creditLimit = "50000"; renderModal(); }})()', el='#modal-box')
+            page.click('#save-btn'); page.wait_for_timeout(300)
+            rep.check('round 2: the credit limit is saved from the customer form', page.evaluate(f'DB.customers.find(c => c.id === {c3}).creditLimit') == 50000)
+            page.evaluate(view('followup', 'FU.tab = "today";'))
+            page.wait_for_timeout(200)
+            page.evaluate(f'document.querySelector(\'.fu-item[data-id="limit:{c3}"]\').scrollIntoView({{block: "center"}})')
+            shot('32_credit_limit_alert', el=f'.fu-item[data-id="limit:{c3}"]')
+            page.evaluate(f'(() => {{ openModal("sale"); DB.form.material = "HDPE"; DB.form.unit = "كيلوجرام"; DB.form.qty = "1000"; DB.form.price = "52"; DB.form.paid = "0"; setF("customerId", {c3}); }})()')
+            shot('33_sale_limit_warning', wait=500)
+            page.evaluate('closeModal()')
             rep.check('no script errors while taking the desktop screenshots', not errors, str(errors))
             browser.close()
 
             # ── phone: the app and the field capture page ──
             browser = pw.chromium.launch(channel='chrome', headless=True)
-            mctx = browser.new_context(viewport={'width': 390, 'height': 844}, locale='ar-EG', is_mobile=True, has_touch=True, device_scale_factor=2)
+            mctx = browser.new_context(viewport={'width': 390, 'height': 844}, locale='ar-EG', is_mobile=True, has_touch=True, device_scale_factor=2, forced_colors='none', color_scheme='light')
             mctx.route('**/*', lambda r: r.continue_() if r.request.url.startswith(('http://127.0.0.1:', 'http://localhost:')) else r.abort())
             m = mctx.new_page()
             m.goto(f'http://127.0.0.1:{PORT}/plastic_manager.html'); m.wait_for_selector('#nav .nav-btn')
@@ -172,6 +185,9 @@ def main():
             m.fill('#text', 'مين متأخر في السداد؟'); m.click('#sendText'); m.wait_for_timeout(1500)
             m.screenshot(path=os.path.join(OUT, '29_field_question.png')); shots.append('29_field_question')
             rep.check('the field page shows the computed answer', 'ورشة أولاد رزق' in m.inner_text('#chat'))
+            last_tbl = m.locator('#chat table.res').last.inner_text() if m.locator('#chat table.res').count() else ''
+            rep.check('round 2: under «who is late?» the classic page shows the late part and the oldest invoice, not the whole balance',
+                      'المتأخر' in last_tbl and 'أقدم فاتورة' in last_tbl and 'الرصيد' not in last_tbl and 'يوم' in last_tbl, last_tbl[:200])
             m.fill('#text', 'اشتريت من هاني عيسي'); m.click('#sendText'); m.wait_for_timeout(1500)
             m.screenshot(path=os.path.join(OUT, '30_field_record.png')); shots.append('30_field_record')
             browser.close()
@@ -179,7 +195,7 @@ def main():
         proc.kill()
         proc.wait(5)
         srv.shutdown()
-    rep.check(f'{len(shots)} screenshots written', len(shots) >= 28)
+    rep.check(f'{len(shots)} screenshots written', len(shots) >= 33)
     print('\n'.join(shots))
     return rep.done()
 

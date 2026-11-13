@@ -21,7 +21,7 @@ Open [`plastic_manager.html`](plastic_manager.html) in a browser and it runs.
 | **Distribution** (`renderDistribution`) | Partner capital and profit distributions |
 | **Review inbox** (`renderDrafts`) | Drafts captured in the field (voice/text) or pasted as JSON wait here; approving opens the normal form pre-filled, with the impact panel, and the save links the record to its draft. Optional link to the drafts service (pull drafts, push name lists, play recordings, mirror decisions) |
 | **Partner funding** (card in `renderBalance`) | Temporary liquidity a partner lends the till (`partnerFunding`, kind `in`/`out`) — a liability, not capital; repayment is capped at what the partner is owed |
-| **Contacts** (`renderContacts`) | Suppliers and customers |
+| **Contacts** (`renderContacts`) | Suppliers and customers; optional per-party credit days and, for customers, an optional credit limit (`creditLimit`, 0 = cash only) that the sale form and the follow-up screen check |
 
 State lives in the browser and is exported to / imported from JSON.
 
@@ -84,7 +84,9 @@ The `.claude/launch.json` config starts exactly this.
 
 `python tests/e2e_app.py` and `python tests/e2e_insights.py` drive the app in headless Chrome (Playwright, the installed Chrome) on a
 synthetic ledger (`tests/synthetic_ledger.py`, invented names); `python tests/screenshots.py <dir>` also links the app to the drafts
-service in mock mode. `node drafts-service/test/service-check.js` covers the service. None of them reads the real `plastic_data_*.json`.
+service in mock mode. `python tests/e2e_round2.py` holds the round-2 regression checks and the customer credit limit;
+`python tests/walkthrough.py` opens every screen, tab and form at desktop, phone and dark (script errors, sideways overflow, RTL,
+accessible names). `node drafts-service/test/service-check.js` covers the service. None of them reads the real `plastic_data_*.json`.
 
 ## Audit
 

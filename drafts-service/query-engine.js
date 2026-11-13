@@ -64,7 +64,7 @@ function runQuery(q, snap, allowed) {
     const sides = q.balanceSide === 'suppliers' ? ['suppliers'] : q.balanceSide === 'customers' ? ['customers'] : ['customers', 'suppliers'];
     let rows = [];
     // oldest / overdue / terms come from the office app (the age of the oldest open deal and the part past its credit days); older snapshots simply lack them
-    const today = q.today || cairoToday();
+    const today = isoDate(q.today) || cairoToday();          // a model that is not schema-bound (Grok/Claude) may send anything here
     sides.forEach(sd => ((snap.balances && snap.balances[sd]) || []).forEach(b => rows.push({ party: b.name, side: sd, balance: b.balance, linked: b.linked || '',
       ...(isoDate(b.oldest) ? { oldest: b.oldest, oldestDay: dayLabel(b.oldest), days: daysBetween(b.oldest, today), overdue: hasNum(b.overdue) ? +b.overdue : 0, terms: hasNum(b.terms) ? +b.terms : null } : {}) })));
     if (q.overdueOnly) {                                       // «مين متأخر في السداد؟»: only balances with a part past its credit days, largest first

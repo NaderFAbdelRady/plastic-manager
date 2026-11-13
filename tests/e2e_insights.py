@@ -241,7 +241,9 @@ def main():
             'order': want_order + ['not-a-real-id', want_order[0]],
             'tips': {f'rec:{C[1]}': 'كلّم ALIAS_C2 النهارده وخد ميعاد، المبلغ ٥٦٬٠٠٠ بقاله 100 يوم.',
                      f'rec:{C[2]}': 'اطلب منه 75000 جنيه فوراً.',
-                     f'rec:{C[0]}': 'ابعت له <b>تذكير</b> <img src=x onerror="window.__xss=1"> ودّي.',
+                     # no digit in this sentence: "__xss=1" quoted a number the item only had on some days (a date with a 1 in it),
+                     # so the guard dropped the sentence on other days and the markup check never ran (found in round 2)
+                     f'rec:{C[0]}': 'ابعت له <b>تذكير</b> <img src=x onerror="window.__xss=true"> ودّي.',
                      'not-a-real-id': 'كلام', 'slow:PVC': 12345}}, ensure_ascii=False) + '\n```'
         page.click('#fu-ai-btn')
         page.wait_for_function('FU.brief && !FU.busy')

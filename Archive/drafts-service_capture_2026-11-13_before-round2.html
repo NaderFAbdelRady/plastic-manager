@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0F6B4F">
+<title>مساعد المكتب — تجارة البلاستيك</title>
+<style>
+  :root{--bg:#F4F6F5;--surface:#fff;--surface-2:#EEF3F1;--border:#D9E1DE;--ink:#1A2421;--muted:#5E6B67;--faint:#8C9793;
+        --accent:#0F6B4F;--accent-soft:#E2F1EB;--gold:#C9A227;--gold-soft:#FBF4DD;--gold-ink:#7A5E0E;--neg:#B3473A;--neg-soft:#FBE9E6;--pos:#1B7F4B;--r:14px}
+  @media (prefers-color-scheme: dark){:root{--bg:#0F1412;--surface:#171E1B;--surface-2:#1F2825;--border:#2A3531;--ink:#E8EEEB;--muted:#A3B0AB;--faint:#6E7A76;--accent:#3FB38A;--accent-soft:#163A2E;--gold-soft:#3A2E0E;--gold-ink:#E8C65A;--neg-soft:#3A1D19;--pos:#4CC083}}
+  *{box-sizing:border-box} html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 'Segoe UI',Tahoma,Arial,sans-serif;display:flex;flex-direction:column}
+  header{background:var(--accent);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-shrink:0}
+  header b{font-size:16px} header .sub{font-size:11.5px;opacity:.85}
+  header button{background:rgba(255,255,255,.18);color:#fff;border:0;border-radius:20px;padding:6px 12px;font:inherit;font-size:12.5px;cursor:pointer}
+  .bar{display:flex;gap:6px;flex-wrap:wrap;padding:8px 14px 0;max-width:640px;margin:0 auto;width:100%}
+  .chip{display:inline-block;background:var(--surface-2);border:1px solid var(--border);border-radius:20px;padding:2px 10px;font-size:11.5px}
+  .chip.ok{background:var(--accent-soft);color:var(--accent);border-color:transparent} .chip.off{background:var(--gold-soft);color:var(--gold-ink);border-color:transparent}
+  #chat{flex:1;overflow-y:auto;padding:12px 14px 16px;max-width:640px;margin:0 auto;width:100%}
+  .msg{max-width:88%;margin:8px 0;padding:10px 14px;border-radius:16px;word-wrap:break-word;white-space:pre-wrap}
+  .me{background:var(--accent);color:#fff;margin-inline-start:auto;border-bottom-left-radius:4px}
+  .bot{background:var(--surface);border:1px solid var(--border);border-bottom-right-radius:4px}
+  .ask{background:var(--gold-soft);color:var(--gold-ink);border:0;font-weight:600}
+  .sys{background:transparent;color:var(--faint);font-size:12.5px;text-align:center;margin:10px auto;max-width:100%;white-space:normal}
+  .err{background:var(--neg-soft);color:var(--neg);border:0}
+  .asof{font-size:11px;color:var(--faint);margin-top:6px}
+  table.res{width:100%;border-collapse:collapse;margin-top:8px;font-size:12.5px;white-space:normal}
+  table.res th,table.res td{padding:4px 6px;border-top:1px solid var(--border);text-align:right}
+  table.res th{color:var(--muted);font-weight:600;border-top:0}
+  table.res td.n{text-align:left;direction:ltr;font-variant-numeric:tabular-nums}
+  .card{background:var(--surface);border:1px solid var(--border);border-right:4px solid var(--gold);border-radius:var(--r);padding:12px 14px;margin:10px 0;white-space:normal}
+  .card h4{margin:0 0 6px;font-size:14px;color:var(--accent)} .card .sum{font-size:13.5px;line-height:1.9}
+  .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .btn{border:0;border-radius:12px;padding:10px 16px;font:inherit;font-weight:700;cursor:pointer}
+  .btn-primary{background:var(--accent);color:#fff} .btn-ghost{background:var(--surface-2);color:var(--ink);border:1px solid var(--border)} .btn-danger{background:var(--neg-soft);color:var(--neg)}
+  .btn:disabled{opacity:.5}
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+  input,select,textarea{width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:9px 11px;color:var(--ink);font:inherit;outline:none}
+  input:focus,select:focus{border-color:var(--accent)}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  details.edit{margin-top:8px} details.edit summary{cursor:pointer;font-size:12.5px;color:var(--accent);font-weight:600}
+  .hidden{display:none !important}
+  .dock{flex-shrink:0;background:var(--surface);border-top:1px solid var(--border);padding:10px 14px calc(10px + env(safe-area-inset-bottom))}
+  .dockin{max-width:640px;margin:0 auto;display:flex;gap:8px;align-items:center}
+  .dockin input{flex:1}
+  .mic{width:58px;height:58px;border-radius:50%;border:0;background:var(--accent);color:#fff;font-size:26px;cursor:pointer;flex-shrink:0;transition:transform .1s}
+  .mic.rec{background:var(--neg);animation:pulse 1s infinite}
+  @keyframes pulse{50%{transform:scale(1.08)}}
+  .icon{background:var(--surface-2);border:1px solid var(--border);border-radius:50%;width:42px;height:42px;font-size:17px;cursor:pointer;flex-shrink:0}
+  .hint{max-width:640px;margin:4px auto 0;text-align:center;font-size:11.5px;color:var(--faint)}
+  #login{max-width:420px;margin:30px auto;padding:0 16px;width:100%}
+  .box{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px}
+  .small{font-size:12px;color:var(--faint)} .list .item{border-top:1px solid var(--border);padding:8px 0;font-size:13px;display:flex;justify-content:space-between;gap:8px}
+  .badge{border-radius:20px;padding:2px 9px;font-size:11.5px;font-weight:700;white-space:nowrap}
+  .b-pending{background:var(--gold-soft);color:var(--gold-ink)} .b-approved{background:var(--accent-soft);color:var(--pos)} .b-rejected{background:var(--neg-soft);color:var(--neg)}
+</style>
+</head>
+<body>
+<header>
+  <div><b>🎙 مساعد المكتب</b><div class="sub">قول اللي حصل أو اسأل — وأنا أفهم</div></div>
+  <div style="display:flex;gap:6px"><button id="newChat" class="hidden">محادثة جديدة</button><button id="mine" class="hidden">مسوداتي</button><button id="logout" class="hidden">خروج</button></div>
+</header>
+
+<section id="login">
+  <div class="box">
+    <b>الدخول</b>
+    <p class="small">اكتب الكود اللي اتبعت لك.</p>
+    <input id="code" type="password" inputmode="numeric" autocomplete="one-time-code" placeholder="••••••">
+    <div id="loginErr" class="msg err hidden" style="max-width:100%"></div>
+    <div class="acts"><button id="loginBtn" class="btn btn-primary" style="width:100%">دخول</button></div>
+  </div>
+</section>
+
+<div id="appbar" class="bar hidden"><span id="aiChip" class="chip"></span><span id="asofChip" class="chip"></span><span id="scopeChip" class="chip"></span></div>
+<main id="chat" class="hidden"></main>
+
+<div id="dock" class="dock hidden">
+  <div class="dockin">
+    <button id="mic" class="mic" aria-label="تكلم">🎤</button>
+    <input id="text" placeholder="أو اكتب هنا…" autocomplete="off">
+    <button id="sendText" class="icon" aria-label="إرسال">➤</button>
+    <button id="speak" class="icon" aria-label="قراءة الردود بصوت عالي" title="قراءة الردود بصوت عالي">🔊</button>
+  </div>
+  <div class="hint" id="hint">اضغط الميكروفون وتكلم: سجّل حركة أو اسأل عن أي حاجة، وأنا أفهم هو إيه</div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const TYPE_LABEL = { purchase: 'شراء', sale: 'بيع', expense: 'مصروف', collection: 'تحصيل', supplierPay: 'دفعة لمورد' };
+const EXP_DEFAULT = ['إيجار', 'نقل', 'عمالة', 'كهرباء ومياه', 'صيانة', 'متفرقات'];
+const S = { code: sessionStorage.getItem('pm_field_code') || '', name: '', ai: false, scopes: [], asOf: '', ref: null,
+            pending: null, draftBlob: null, draftMime: '', draftSecs: 0, conversation: [], lastQuery: null,
+            rec: null, chunks: [], timer: null, t0: 0, busy: false, speak: localStorage.getItem('pm_speak') !== '0' };
+const api = async (path, opts = {}) => {
+  const r = await fetch(path, { ...opts, headers: { 'Content-Type': 'application/json', 'X-Field-Code': S.code, ...(opts.headers || {}) } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+};
+const show = (id, on = true) => $(id).classList.toggle('hidden', !on);
+const today = () => new Date().toISOString().slice(0, 10);
+const fmtN = n => Math.round(+n || 0).toLocaleString('en-US');
+
+// ── chat helpers ──
+function add(cls, html) {
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.innerHTML = html; $('chat').appendChild(d);
+  $('chat').scrollTop = $('chat').scrollHeight; return d;
+}
+const sys = t => add('sys', esc(t));
+function say(text, cls = 'bot', speak = true) { add(cls, esc(text)); if (speak) tts(text); }
+function tts(text) {
+  if (!S.speak || !window.speechSynthesis || !text) return;
+  try {
+    speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(String(text).replace(/\s+/g, ' ')); u.lang = 'ar-EG';
+    const v = speechSynthesis.getVoices().find(x => /^ar/i.test(x.lang)); if (v) u.voice = v; u.rate = 0.95; speechSynthesis.speak(u);
+  } catch (e) {}
+}
+$('speak').onclick = () => { S.speak = !S.speak; localStorage.setItem('pm_speak', S.speak ? '1' : '0'); $('speak').textContent = S.speak ? '🔊' : '🔇'; if (!S.speak && window.speechSynthesis) speechSynthesis.cancel(); };
+
+// ── login ──
+async function refreshMode() {   // the owner may switch the AI model while this page is open
+  try { const j = await api('/api/field/login', { method: 'POST', body: JSON.stringify({ code: S.code }) }); S.ai = !!j.ai; S.audioInput = j.audioInput !== false; } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.code && S.name) refreshMode(); });
+async function login(code) {
+  const j = await api('/api/field/login', { method: 'POST', body: JSON.stringify({ code }) });
+  S.code = code; S.name = j.name; S.ai = !!j.ai; S.audioInput = j.audioInput !== false; S.scopes = j.scopes || []; S.asOf = j.asOf || ''; sessionStorage.setItem('pm_field_code', code);
+  show('login', false); ['appbar', 'chat', 'dock', 'logout', 'newChat', 'mine'].forEach(i => show(i));
+  $('aiChip').textContent = S.ai ? '🤖 بفهم من الكلام' : '✍️ إدخال يدوي'; $('aiChip').className = 'chip ' + (S.ai ? 'ok' : 'off');
+  $('asofChip').textContent = S.asOf ? '📅 بيانات المكتب: ' + S.asOf : '📅 المكتب لسه ما رفعش بيانات'; $('asofChip').className = 'chip ' + (S.asOf ? 'ok' : 'off');
+  const L = { deals: 'الصفقات', money: 'الفلوس', expenses: 'المصروفات', inventory: 'المخزون' };
+  $('scopeChip').textContent = '👁 تسأل عن: ' + (S.scopes.map(x => L[x]).join('، ') || 'مفيش'); $('scopeChip').className = 'chip';
+  $('speak').textContent = S.speak ? '🔊' : '🔇';
+  try { S.ref = await api('/api/field/reference'); } catch (e) { S.ref = { suppliers: [], customers: [], materials: [], expenseCats: EXP_DEFAULT }; }
+  resetChat();
+}
+function resetChat() {
+  S.pending = null; S.draftBlob = null; S.conversation = []; S.lastQuery = null; $('chat').innerHTML = '';
+  if (S.ai) add('bot', 'أهلاً يا ' + esc(S.name) + ' 👋<br>اضغط الميكروفون وقول أي حاجة:<br>• «اشتريت من هاني ألفين كيلو ABS…» أسجلها<br>• «حساب فلكس كام؟» أجاوبك<br>• «إيه اللي حصل امبارح؟» أقولك');
+  else { add('bot', 'الفهم التلقائي مش متفعّل — املأ الحركة بإيدك.'); showDraft({ type: 'purchase', fields: {} }, true); }
+}
+$('newChat').onclick = () => { resetChat(); };
+
+// ── recording ──
+async function startRec() {
+  if (!navigator.mediaDevices || !window.MediaRecorder) { sys('المتصفح ده ما بيدعمش التسجيل — اكتب بدل الصوت'); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find(m => MediaRecorder.isTypeSupported(m)) || '';
+    S.rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : undefined);
+    S.chunks = []; const mt = S.rec.mimeType || mime || 'audio/webm';
+    S.rec.ondataavailable = e => { if (e.data && e.data.size) S.chunks.push(e.data); };
+    S.rec.onstop = () => { stream.getTracks().forEach(t => t.stop()); const blob = new Blob(S.chunks, { type: mt }); const secs = Math.round((Date.now() - S.t0) / 1000); if (secs >= 1) sendVoice(blob, mt, secs); };
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    S.rec.start(); S.t0 = Date.now(); $('mic').classList.add('rec'); $('mic').textContent = '⏹';
+    $('hint').textContent = 'بسمعك… اضغط تاني لما تخلص';
+    S.timer = setTimeout(stopRec, 120000);
+  } catch (e) { sys('مفيش إذن للميكروفون — اسمح للصفحة تستخدمه أو اكتب'); }
+}
+function stopRec() { clearTimeout(S.timer); $('mic').classList.remove('rec'); $('mic').textContent = '🎤'; $('hint').textContent = 'بفهم…'; if (S.rec && S.rec.state !== 'inactive') S.rec.stop(); }
+// When the AI can't take audio (Grok), the browser turns speech into text itself and we send the text.
+// Chrome's recognizer (Android especially) repeats itself: each result may contain everything said so far, so the same
+// words come back several times. Merge by treating a result that extends / repeats the previous one as the same segment.
+function mergeSpeech(texts) {
+  const segs = [];
+  for (let raw of texts) {
+    const t = String(raw || '').replace(/\s+/g, ' ').trim(); if (!t) continue;
+    const last = segs.length ? segs[segs.length - 1] : '';
+    if (!last) { segs.push(t); continue; }
+    if (t === last || last.startsWith(t)) continue;           // same or an older, shorter version
+    if (t.startsWith(last)) { segs[segs.length - 1] = t; continue; }   // grew: replace
+    if (last.endsWith(t)) continue;                            // already contained at the end
+    // overlap: the tail of what we have equals the head of the new piece
+    let k = Math.min(last.length, t.length); let merged = false;
+    for (; k >= 6; k--) { if (last.slice(-k) === t.slice(0, k)) { segs[segs.length - 1] = last + t.slice(k); merged = true; break; } }
+    if (!merged) segs.push(t);
+  }
+  return segs.join(' ').trim();
+}
+function startListen() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { sys('المتصفح ده ما بيفهمش الصوت — جرّب Chrome أو اكتب الحركة'); return; }
+  const r = new SR(); r.lang = 'ar-EG'; r.interimResults = true; r.continuous = true; r.maxAlternatives = 1;
+  let merged = '', live = null;
+  r.onresult = e => {
+    const texts = []; for (let i = 0; i < e.results.length; i++) texts.push(e.results[i][0].transcript);
+    merged = mergeSpeech(texts);
+    if (!live) live = add('me', ''); live.innerHTML = '🎤 ' + esc(merged) + ' …';
+  };
+  r.onerror = e => { if (e.error === 'not-allowed') sys('مفيش إذن للميكروفون — اسمح للصفحة تستخدمه أو اكتب'); else if (e.error !== 'no-speech' && e.error !== 'aborted') sys('ما سمعتش كويس (' + e.error + ') — جرّب تاني أو اكتب'); };
+  r.onend = async () => {
+    S.listening = false; $('mic').classList.remove('rec'); $('mic').textContent = '🎤';
+    const t = merged.trim();
+    if (!t) { if (live) live.remove(); idle(); return; }
+    live.innerHTML = '🎤 ' + esc(t); await converse({ text: t }, live, null);
+  };
+  S.sr = r; S.listening = true; if (window.speechSynthesis) speechSynthesis.cancel();
+  r.start(); $('mic').classList.add('rec'); $('mic').textContent = '⏹'; $('hint').textContent = 'بسمعك… اضغط تاني لما تخلص';
+}
+$('mic').onclick = () => {
+  if (S.busy) return;
+  if (S.audioInput === false) { S.listening ? S.sr.stop() : startListen(); return; }
+  (S.rec && S.rec.state === 'recording') ? stopRec() : startRec();
+};
+
+async function blobToWav16k(blob) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+  const rate = 16000, len = Math.max(1, Math.ceil(buf.duration * rate));
+  const off = new OfflineAudioContext(1, len, rate);
+  const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
+  const pcm = (await off.startRendering()).getChannelData(0);
+  const wav = new ArrayBuffer(44 + pcm.length * 2), v = new DataView(wav);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) { const s = Math.max(-1, Math.min(1, pcm[i])); v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true); }
+  try { ctx.close(); } catch (e) {}
+  return new Blob([wav], { type: 'audio/wav' });
+}
+const blobToB64 = blob => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(blob); });
+
+// ── talking to the service ──
+async function sendVoice(blob, mime, secs) {
+  if (!S.ai) return;
+  const bubble = add('me', '🎤 <i>بيتفرّغ…</i>');
+  try { const wav = await blobToB64(await blobToWav16k(blob)); await converse({ audio: wav, mime: 'audio/wav' }, bubble, { blob, mime, secs }); }
+  catch (e) { bubble.remove(); add('err', esc('ما قدرتش أفهم الصوت: ' + e.message)); idle(); }
+}
+async function sendText() {
+  const t = $('text').value.trim(); if (!t || S.busy) return; $('text').value = '';
+  if (!S.ai) { sys('اكتب الحركة في الفورم تحت'); return; }
+  const bubble = add('me', esc(t)); await converse({ text: t }, bubble, null);
+}
+$('sendText').onclick = sendText; $('text').addEventListener('keydown', e => { if (e.key === 'Enter') sendText(); });
+function idle() { S.busy = false; $('hint').textContent = 'اضغط الميكروفون وتكلم: سجّل حركة أو اسأل عن أي حاجة'; }
+
+async function converse(payload, bubble, voice) {
+  S.busy = true;
+  try {
+    const pending = S.multi ? S.multi : (S.pending ? readForm() : null);
+    const r = await api('/api/field/converse', { method: 'POST', body: JSON.stringify({ ...payload, conversation: S.conversation, pending, lastQuery: S.lastQuery }) });
+    const heard = r.transcript || payload.text || '';
+    if (voice) bubble.innerHTML = '🎤 ' + esc(heard);
+    S.conversation.push({ role: 'user', text: heard });
+    handle(r, heard, voice);
+  } catch (e) {
+    if (voice) bubble.remove();
+    if (/نص بس/.test(e.message)) { await refreshMode(); say('نظام الفهم اتغيّر. اضغط الميكروفون وقول تاني.', 'bot ask', false); }
+    else add('err', esc('ما قدرتش أفهم: ' + e.message));
+  }
+  finally { idle(); }
+}
+function dayAr(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || '')); if (!m) return String(iso || ''); return ['الأحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس', 'الجمعة', 'السبت'][new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()] + ' ' + (+m[3]) + '/' + (+m[2]); }
+function sumLine(d) {
+  const f = d.fields || {}, p = [dayAr(f.date || today()), TYPE_LABEL[d.type]];
+  if (f.party) p.push(f.party);
+  if (d.type === 'purchase' || d.type === 'sale') { p.push(`${f.material || '؟'} ${f.qty ? fmtN(f.qty) + ' ' + (f.unit || '') : '؟'}`, `بسعر ${f.price || '؟'}`); if (f.paid) p.push('مدفوع ' + fmtN(f.paid)); }
+  else { if (f.amount) p.push(fmtN(f.amount) + ' جنيه'); if (f.cat) p.push(f.cat); if (f.desc || f.note) p.push(f.desc || f.note); }
+  return p.join(' · ');
+}
+// A story with several transactions: one card listing them; "ابعت الكل" files each as its own draft.
+function showMulti(recs) {
+  $('chat').querySelectorAll('.card.live').forEach(c => c.remove());
+  const c = document.createElement('div'); c.className = 'card live';
+  c.innerHTML = `<h4>📝 ${recs.length} حركات</h4><div class="sum">${recs.map((d, i) => `<div>${i + 1}) ${esc(sumLine(d))}</div>`).join('')}</div><div class="acts"><button id="mSend" class="btn btn-primary">✓ ابعت الكل للمراجعة</button><button id="mCancel" class="btn btn-danger">✗ إلغاء</button></div><div id="mErr" class="small"></div>`;
+  $('chat').appendChild(c); $('chat').scrollTop = $('chat').scrollHeight;
+  $('mSend').onclick = submitMulti; $('mCancel').onclick = () => { S.multi = null; c.remove(); say('لغيت المسودات.', 'bot', false); };
+}
+async function submitMulti() {
+  const recs = S.multi; if (!recs || !recs.length) { say('مفيش حركات معلّقة.', 'bot', false); return; }
+  $('mSend') && ($('mSend').disabled = true);
+  try {
+    for (const d of recs) await api('/api/field/drafts', { method: 'POST', body: JSON.stringify({ type: d.type, fields: d.fields, transcript: S.transcript || '', conversation: S.conversation }) });
+    $('chat').querySelectorAll('.card.live').forEach(c => c.remove());
+    S.multi = null; S.transcript = '';
+    say(`✓ ${recs.length} حركات اتبعتوا للمراجعة. تحب تسجّل حاجة تانية أو تسأل عن حاجة؟`);
+    S.conversation.push({ role: 'assistant', text: 'اتبعتت المسودات للمراجعة' });
+  } catch (e) { $('mErr') && ($('mErr').textContent = 'ما اتبعتتش: ' + e.message); $('mSend') && ($('mSend').disabled = false); }
+}
+function handle(r, heard, voice) {
+  const bot = t => { if (t) S.conversation.push({ role: 'assistant', text: t }); };
+  if (r.query && r.answer) showAnswer(r);
+  if (r.records && r.records.length > 1) {
+    if (!S.multi) S.transcript = heard;
+    S.multi = r.records.map(x => ({ type: x.type, fields: x.fields })); S.pending = null;
+    showMulti(S.multi);
+    const ask = r.records.find(x => x.question);
+    const t = ask ? ask.question : `فهمت ${S.multi.length} حركات — راجعهم وقول «أيوه» أو اضغط ابعت الكل.`;
+    ask ? say(t, 'bot ask') : say(t); bot(t);
+    return;
+  }
+  if (r.record) {
+    S.multi = null;
+    if (voice && !S.draftBlob) { S.draftBlob = voice.blob; S.draftMime = voice.mime; S.draftSecs = voice.secs; }
+    if (!S.pending) S.transcript = heard; S.pending = { type: r.record.type, fields: r.record.fields };
+    showDraft(S.pending, false);
+    const t = r.record.question || (r.record.reply ? r.record.reply + ' — صح؟ قول «أيوه» أو اضغط ابعت.' : 'راجع الحركة وقول «أيوه» أو اضغط ابعت.');
+    r.record.question ? say(t, 'bot ask') : say(t); bot(t);
+    return;
+  }
+  if (r.answer) { bot(r.answer); tts(r.answer); if (r.query && r.query.structured) S.lastQuery = r.query.structured; return; }
+  if (r.kind === 'confirm') { if (S.multi) submitMulti(); else if (S.pending) submit(); else say('مفيش حركة معلّقة أبعتها.'); return; }
+  if (r.kind === 'cancel') { S.pending = null; S.multi = null; S.draftBlob = null; $('chat').querySelectorAll('.card.live').forEach(c => c.remove()); say('تمام، لغيتها.'); bot('لغيت المسودة'); return; }
+  if (r.kind === 'clarify') { say(r.question || 'ممكن توضّح؟', 'bot ask'); bot(r.question); return; }
+  if (r.kind === 'chat') { say(r.reply || 'أهلاً!'); bot(r.reply); return; }
+  say('ما فهمتش، ممكن تعيد؟');
+}
+
+// ── answers ──
+function showAnswer(r) {
+  const qs = r.queries && r.queries.length > 1 ? r.queries : [r.query];       // one sentence can ask for several things: each gets its own table
+  qs.forEach((qq, i) => showAnswerOne({ answer: i === 0 ? r.answer : '', query: qq }, qq.label, i === qs.length - 1));
+}
+function showAnswerOne(r, label, last) {
+  const res = r.query.result || {};
+  let html = (label ? `<b>آخر ${esc(label)}</b><br>` : '') + esc(r.answer);
+  const th = a => '<tr>' + a.map(x => `<th>${x}</th>`).join('') + '</tr>', td = a => '<tr>' + a.map((x, i) => `<td class="${/^[\d,.\-]+$/.test(String(x)) ? 'n' : ''}">${esc(x)}</td>`).join('') + '</tr>';
+  let tbl = '';
+  const FL = { cash: 'الخزنة', cashIn: 'مقبوض من البيع', collections: 'تحصيلات', boughtCash: 'مشتريات كاش', paidToSuppliers: 'دفعات موردين', expenses: 'مصروفات', partnerDraws: 'سحوبات شركاء', distributionPaid: 'توزيع أرباح مدفوع', partnerFundingIn: 'تمويل شركاء (داخل)', partnerFundingOut: 'رد تمويل',
+    netProfit: 'صافي الربح', totalRevenue: 'المبيعات', cogs: 'تكلفة البضاعة', gross: 'مجمل الربح', distributed: 'اتوزع', availableProfit: 'المتاح للتوزيع', receivable: 'عند العملاء', inventoryValue: 'المخزون', payable: 'علينا للموردين', partnerLoans: 'تمويل شركاء مستحق', capital: 'رأس المال', equity: 'حقوق الملكية',
+    revenue: 'المبيعات', net: 'الصافي', requested: 'المبلغ المطلوب توزيعه', cashBefore: 'الخزنة قبل', cashPaidOut: 'هيخرج كاش', cashAfter: 'الخزنة بعد' };
+  if (res.entity === 'finance' && res.data) {
+    const rows = Object.entries(res.data).filter(([k, v]) => typeof v === 'number' && FL[k] !== undefined).map(([k, v]) => td([FL[k], fmtN(v)]));
+    if (rows.length) tbl = th(['البند', 'المبلغ']) + rows.join('');
+    if (res.rows && res.rows.length && res.topic === 'distribution') tbl += th(['الشريك', 'نصيبه', 'سحوبات مخصومة', 'يستلم']) + res.rows.map(x => td([x.party, fmtN(x.gross), fmtN(x.absorbed), fmtN(x.net)])).join('');
+    else if (res.rows && res.rows.length && res.topic === 'partners') tbl += th(['الشريك', 'النسبة', 'سحوبات', 'تمويل له']) + res.rows.map(x => td([x.name, x.sharePct + '%', fmtN(x.draws), fmtN(x.loan)])).join('');
+    else if (res.rows && res.rows.length && res.topic === 'pl') tbl += th(['الشهر', 'مبيعات', 'مصروفات', 'صافي']) + res.rows.map(x => td([x.month, fmtN(x.revenue), fmtN(x.expenses), fmtN(x.net)])).join('');
+    else if (res.rows && res.rows.length && res.topic === 'closings') tbl += th(['التقفيل', 'الربح', 'الخزنة']) + res.rows.map(x => td([dayAr(x.date), fmtN(x.net), fmtN(x.cash)])).join('');
+  } else if (res.entity === 'finance' && res.rows && res.rows.length) {
+    if (res.topic === 'partners') tbl = th(['الشريك', 'النسبة', 'سحوبات', 'تمويل له']) + res.rows.map(x => td([x.name, x.sharePct + '%', fmtN(x.draws), fmtN(x.loan)])).join('');
+    else if (res.topic === 'closings') tbl = th(['التقفيل', 'الربح', 'الخزنة']) + res.rows.map(x => td([dayAr(x.date), fmtN(x.net), fmtN(x.cash)])).join('');
+  }
+  else if (res.entity === 'balances' && res.rows && res.rows.length) tbl = th(['الاسم', 'النوع', 'الرصيد']) + res.rows.slice(0, 12).map(x => td([x.party, x.side === 'customers' ? 'عميل' : 'مورد', balText(x)])).join('');
+  else if (res.entity === 'inventory' && res.rows && res.rows.length) tbl = th(['الخامة', 'المخزون']) + res.rows.slice(0, 15).map(x => td([x.material, fmtN(x.stock) + ' ' + (x.unit || 'كجم')])).join('');
+  else if (res.groups && res.groups.length) tbl = th(['', 'الإجمالي', 'العدد']) + res.groups.slice(0, 12).map(g => td([g.key, fmtN(g.amount), g.count])).join('');
+  else if (res.rows && res.rows.length) tbl = th(['التاريخ', 'النوع', 'الطرف', 'التفاصيل', 'المبلغ']) + res.rows.slice(0, 15).map(x => td([x.day || dayAr(x.date), x.kindAr || x.kind, x.party || '', x.material ? (x.material + (x.qty ? ' ' + fmtN(x.qty) : '')) : (x.text || ''), fmtN(x.amount)])).join('');
+  if (tbl) html += '<table class="res">' + tbl + '</table>';
+  if (last && r.query.asOf) html += `<div class="asof">حسب آخر تحديث من المكتب: ${esc(r.query.asOf)}</div>`;
+  add('bot', html);
+}
+function balText(x) { const v = Math.round(x.balance); if (!v) return 'خالص'; return x.side === 'customers' ? (v > 0 ? 'عليه ' + fmtN(v) : 'ليه ' + fmtN(-v)) : (v > 0 ? 'ليه علينا ' + fmtN(v) : 'مقدم ' + fmtN(-v)); }
+
+// ── draft card (summary + editable form) ──
+function formHtml() {
+  return `<details class="edit"><summary>✎ عدّل الحقول</summary>
+  <label>نوع الحركة</label><select id="f_type"><option value="purchase">شراء من مورد</option><option value="sale">بيع لعميل</option><option value="expense">مصروف</option><option value="collection">تحصيل من عميل</option><option value="supplierPay">دفعة لمورد</option></select>
+  <div class="row"><div><label>التاريخ</label><input id="f_date" type="date"></div><div id="partyWrap"><label id="partyLbl">المورد</label><input id="f_party" list="partyList"><datalist id="partyList"></datalist></div></div>
+  <div id="dealFields"><div class="row"><div><label>الخامة</label><input id="f_material" list="matList"><datalist id="matList"></datalist></div><div><label>اللون</label><input id="f_color"></div></div>
+   <div class="row"><div><label>الكمية</label><input id="f_qty" type="number" inputmode="decimal" step="any"></div><div><label>الوحدة</label><select id="f_unit"><option value="كيلوجرام">كيلوجرام</option><option value="طن">طن</option></select></div></div>
+   <div class="row"><div><label>السعر للوحدة</label><input id="f_price" type="number" inputmode="decimal" step="any"></div><div><label>المدفوع كاش</label><input id="f_paid" type="number" inputmode="decimal" step="any"></div></div>
+   <div class="row"><div><label>مصاريف الصفقة</label><input id="f_tx" placeholder="نقل 1000، عمال 500"></div><div><label>مكان التخزين</label><input id="f_location"></div></div></div>
+  <div id="expenseFields" class="hidden"><div class="row"><div><label>الفئة</label><select id="f_cat"></select></div><div><label>المبلغ</label><input id="f_amount_e" type="number" inputmode="decimal" step="any"></div></div><label>البيان</label><input id="f_desc"></div>
+  <div id="moneyFields" class="hidden"><label>المبلغ</label><input id="f_amount_m" type="number" inputmode="decimal" step="any"><label>ملاحظة</label><input id="f_note"></div></details>`;
+}
+function showDraft(d, open) {
+  $('chat').querySelectorAll('.card.live').forEach(c => c.remove());
+  const c = document.createElement('div'); c.className = 'card live';
+  c.innerHTML = `<h4>📝 مسودة: <span id="dTitle"></span></h4><div class="sum" id="dSum"></div>${formHtml()}<div class="acts"><button id="dSend" class="btn btn-primary">✓ ابعت للمراجعة</button><button id="dCancel" class="btn btn-danger">✗ إلغاء</button></div><div id="dErr" class="small" style="color:var(--neg)"></div>`;
+  $('chat').appendChild(c); $('chat').scrollTop = $('chat').scrollHeight;
+  if (open) c.querySelector('details').open = true;
+  const ref = S.ref || {};
+  $('matList').innerHTML = (ref.materials || []).map(m => `<option value="${esc(m)}">`).join('');
+  $('f_cat').innerHTML = (ref.expenseCats && ref.expenseCats.length ? ref.expenseCats : EXP_DEFAULT).map(x => `<option>${esc(x)}</option>`).join('');
+  fillForm(d); syncType();
+  $('f_type').onchange = () => { syncType(); refreshSum(); };
+  c.querySelectorAll('input,select').forEach(i => i.addEventListener('input', refreshSum));
+  $('dSend').onclick = submit;
+  $('dCancel').onclick = () => { S.pending = null; S.draftBlob = null; c.remove(); say('لغيت المسودة.', 'bot', false); };
+  refreshSum();
+}
+function syncType() {
+  const t = $('f_type').value, deal = t === 'purchase' || t === 'sale', exp = t === 'expense', money = t === 'collection' || t === 'supplierPay';
+  show('dealFields', deal); show('expenseFields', exp); show('moneyFields', money); show('partyWrap', !exp);
+  const sup = t === 'purchase' || t === 'supplierPay'; $('partyLbl').textContent = sup ? 'المورد' : 'العميل';
+  $('partyList').innerHTML = ((sup ? S.ref?.suppliers : S.ref?.customers) || []).map(n => `<option value="${esc(n)}">`).join('');
+}
+function fillForm(d) {
+  const f = d.fields || {}; $('f_type').value = d.type || 'purchase'; syncType();
+  $('f_date').value = /^\d{4}-\d{2}-\d{2}$/.test(f.date || '') ? f.date : today();
+  $('f_party').value = f.party || ''; $('f_material').value = f.material || ''; $('f_color').value = f.color || '';
+  $('f_qty').value = f.qty ?? ''; $('f_unit').value = (f.unit && /طن/.test(f.unit)) ? 'طن' : 'كيلوجرام';
+  $('f_price').value = f.price ?? ''; $('f_paid').value = f.paid ?? ''; $('f_location').value = f.location || '';
+  $('f_tx').value = Array.isArray(f.txExpenses) ? f.txExpenses.map(e => `${e.desc} ${e.amount}`).join('، ') : '';
+  if (f.cat) $('f_cat').value = f.cat; $('f_amount_e').value = f.amount ?? ''; $('f_desc').value = f.desc || f.note || '';
+  $('f_amount_m').value = f.amount ?? ''; $('f_note').value = f.note || f.desc || '';
+}
+const n = v => { const x = parseFloat(String(v).replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))); return Number.isFinite(x) ? x : 0; };
+function readForm() {
+  const t = $('f_type').value, f = { date: $('f_date').value || today() };
+  if (t !== 'expense') f.party = $('f_party').value.trim();
+  if (t === 'purchase' || t === 'sale') Object.assign(f, { material: $('f_material').value.trim(), color: $('f_color').value.trim(), qty: n($('f_qty').value), unit: $('f_unit').value, price: n($('f_price').value), paid: n($('f_paid').value), location: $('f_location').value.trim(),
+    txExpenses: $('f_tx').value.split(/[،,]/).map(s => s.trim()).filter(Boolean).map(s => { const m = s.match(/^(.*?)\s*([\d٠-٩.,]+)\s*$/); return m ? { desc: m[1].trim() || 'مصاريف', amount: n(m[2]) } : null; }).filter(e => e && e.amount > 0) });
+  if (t === 'expense') Object.assign(f, { cat: $('f_cat').value, amount: n($('f_amount_e').value), desc: $('f_desc').value.trim() });
+  if (t === 'collection' || t === 'supplierPay') Object.assign(f, { amount: n($('f_amount_m').value), note: $('f_note').value.trim() });
+  return { type: t, fields: f };
+}
+function refreshSum() {
+  if (!$('dSum')) return; const { type, fields: f } = readForm();
+  $('dTitle').textContent = TYPE_LABEL[type];
+  const parts = [`<b>${esc(dayAr(f.date))}</b>`];
+  if (f.party) parts.push(esc(f.party));
+  if (type === 'purchase' || type === 'sale') { parts.push(`${esc(f.material || '؟')} ${f.qty ? fmtN(f.qty) + ' ' + esc(f.unit) : '؟'}`); parts.push(`بسعر ${f.price || '؟'}`); const tot = (f.qty || 0) * (f.price || 0); if (tot) parts.push(`الإجمالي ${fmtN(tot)}`); parts.push(f.paid ? `مدفوع ${fmtN(f.paid)}` : 'آجل'); if (f.txExpenses && f.txExpenses.length) parts.push('مصاريف ' + f.txExpenses.map(e => esc(e.desc) + ' ' + fmtN(e.amount)).join('، ')); if (f.location) parts.push('📍 ' + esc(f.location)); }
+  else { parts.push(`المبلغ ${f.amount ? fmtN(f.amount) : '؟'}`); if (f.cat) parts.push(esc(f.cat)); if (f.desc || f.note) parts.push(esc(f.desc || f.note)); }
+  $('dSum').innerHTML = parts.join(' · ');
+}
+function validate({ type, fields: f }) {
+  if (type !== 'expense' && !f.party) return 'اكتب اسم ' + (type === 'purchase' || type === 'supplierPay' ? 'المورد' : 'العميل');
+  if ((type === 'purchase' || type === 'sale') && (!f.material || !(f.qty > 0) || !(f.price > 0))) return 'الخامة والكمية والسعر لازم يتكتبوا';
+  if ((type === 'expense' || type === 'collection' || type === 'supplierPay') && !(f.amount > 0)) return 'اكتب المبلغ';
+  return '';
+}
+async function submit() {
+  if (!$('dSend')) { say('مفيش حركة معلّقة.', 'bot', false); return; }
+  const d = readForm(), bad = validate(d); if (bad) { $('dErr').textContent = bad; say(bad + ' — عدّل الحقول وابعت.', 'bot ask'); $('dSend').closest('.card').querySelector('details').open = true; return; }
+  $('dSend').disabled = true; $('dErr').textContent = '';
+  try {
+    const body = { ...d, transcript: S.transcript || '', conversation: S.conversation };
+    if (S.draftBlob) { body.audio = await blobToB64(S.draftBlob); body.mime = S.draftMime; body.audioSeconds = S.draftSecs; }
+    await api('/api/field/drafts', { method: 'POST', body: JSON.stringify(body) });
+    $('chat').querySelectorAll('.card.live').forEach(c => c.remove());
+    S.pending = null; S.draftBlob = null; S.transcript = '';
+    say('✓ اتبعتت للمراجعة. تحب تسجّل حاجة تانية أو تسأل عن حاجة؟');
+    S.conversation.push({ role: 'assistant', text: 'اتبعتت المسودة للمراجعة' });
+  } catch (e) { $('dErr').textContent = 'ما اتبعتتش: ' + e.message; $('dSend').disabled = false; }
+}
+
+// ── my drafts ──
+$('mine').onclick = async () => {
+  try {
+    const rows = await api('/api/field/drafts'); const st = { pending: 'في المراجعة', approved: 'اتعتمدت', rejected: 'مرفوضة' };
+    add('bot', '<b>مسوداتي</b><div class="list">' + (rows.length ? rows.map(d => { const f = d.fields || {}, sum = [f.party, f.material, f.qty ? f.qty + ' ' + (f.unit || '') : '', f.amount ? f.amount + ' ج' : '', f.desc].filter(Boolean).join(' · ');
+      return `<div class="item"><div><b>${esc(TYPE_LABEL[d.type] || d.type)}</b> ${esc(sum)}<div class="small">${esc(dayAr(String(d.createdAt).slice(0, 10)))} ${esc(new Date(d.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }))}${d.reviewNote ? ' · ' + esc(d.reviewNote) : ''}</div></div><span class="badge b-${esc(d.status)}">${st[d.status] || d.status}</span></div>`; }).join('') : '<div class="small">لسه ما بعتش حاجة</div>') + '</div>');
+  } catch (e) { add('err', esc('ما قدرتش أجيب القائمة: ' + e.message)); }
+};
+
+$('loginBtn').onclick = async () => { $('loginErr').classList.add('hidden'); try { await login($('code').value.trim()); } catch (e) { $('loginErr').textContent = e.message; $('loginErr').classList.remove('hidden'); } };
+$('code').addEventListener('keydown', e => { if (e.key === 'Enter') $('loginBtn').click(); });
+$('logout').onclick = () => { sessionStorage.removeItem('pm_field_code'); location.reload(); };
+if (window.speechSynthesis) speechSynthesis.getVoices();
+if (S.code) login(S.code).catch(() => sessionStorage.removeItem('pm_field_code'));
+})();
+</script>
+</body>
+</html>
