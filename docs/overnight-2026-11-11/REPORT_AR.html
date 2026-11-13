@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>تقرير الجاهزية: تجارة البلاستيك</title>
+<style>
+  @page { size: A4; margin: 15mm 13mm; }
+  :root { --ink:#1d2621; --muted:#5d6b63; --accent:#0F6B4F; --soft:#eef5f1; --line:#d9e2dc; --red:#b03a2e; --amber:#a8791f; }
+  body { font-family: "Segoe UI", Tahoma, "Noto Naskh Arabic", sans-serif; color: var(--ink); line-height: 1.85; font-size: 11pt; margin: 0; }
+  h1 { font-size: 22pt; color: var(--accent); margin: 0 0 4px; }
+  h2 { font-size: 15pt; color: var(--accent); border-bottom: 2px solid var(--line); padding-bottom: 3px; margin: 22px 0 8px; page-break-after: avoid; }
+  h3 { font-size: 12pt; margin: 14px 0 4px; page-break-after: avoid; }
+  table { width: 100%; border-collapse: collapse; font-size: 9.6pt; margin: 6px 0 12px; }
+  th, td { border: 1px solid var(--line); padding: 4px 7px; text-align: right; vertical-align: top; overflow-wrap: anywhere; }
+  th { background: var(--soft); }
+  tr { page-break-inside: avoid; }
+  code { direction: ltr; unicode-bidi: embed; background: #f3f5f4; padding: 0 4px; border-radius: 3px; font-family: Consolas, monospace; font-size: 9pt; }
+  .score { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 10px 0; }
+  .score div { border: 1px solid var(--line); border-radius: 8px; text-align: center; padding: 8px 4px; }
+  .score b { display: block; font-size: 18pt; color: var(--accent); }
+  .hi { color: var(--red); font-weight: 700; } .md { color: var(--amber); font-weight: 700; } .lo { color: var(--muted); font-weight: 700; }
+  .box { background: var(--soft); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+  ul, ol { margin: 4px 0 8px; padding-inline-start: 20px; }
+  a { color: var(--accent); word-break: break-all; }
+  .muted { color: var(--muted); font-size: 9.5pt; }
+</style>
+</head>
+<body>
+<h1>تقرير الجاهزية: تجارة البلاستيك</h1>
+<div class="muted">مراجعة ليلية كاملة، ١١ نوفمبر ٢٠٢٦ · <code>plastic_manager.html</code> + <code>drafts-service/</code> · مفيش commit ولا push ولا نشر: كل التعديلات في الـ working tree مستنية قرارك.</div>
+
+<h2>١. الخلاصة</h2>
+<p>البرنامج متين محاسبياً: الأرقام اللي بيطلعها (الإيرادات، تكلفة المبيعات بالمتوسط المرجّح، صافي الربح، المخزون، الخزنة، الذمم) طابقت حساب مستقل كتبته في Python على دفاتر تجريبية، والميزانية بتتوازن. لقيت <b>٥ باجز في البرنامج و٥ في الخدمة</b> واتصلحت كلها، وأخطرها: فتح ملف JSON مش ملف بيانات كان بيمسح الدفاتر ويكتب الفاضي فوق النسخة المحفوظة في المتصفح، وأكواد ناس الميدان كانت ممكن تتخمّن من غير حد من أي endpoint غير شاشة الدخول. وضفت <b>شاشة «المتابعة والتنبيهات»</b>: قايمة يومية بالتحصيل والسداد والسيولة والهوامش والمخزون الراكد والمواعيد، كل أرقامها محسوبة بالكود، ومعاها صياغة اختيارية بالذكاء الاصطناعي عليها حارس أرقام. واتضاف كمان سؤال «مين متأخر في السداد؟» في صفحة الميدان. الاختبارات بقت ١٨١ فحص آلي على Chrome حقيقي وعلى الخدمة، كلها ناجحة.</p>
+<div class="score">
+  <div>جودة الكود<b>6.5</b>/10</div>
+  <div>الاختبارات<b>7</b>/10</div>
+  <div>الأمان<b>7</b>/10</div>
+  <div>تجربة الاستخدام<b>8</b>/10</div>
+  <div>جاهزية النشر<b>7</b>/10</div>
+</div>
+
+<h2>٢. حالة الكود</h2>
+<h3>المعمارية</h3>
+<ul>
+  <li><b>البرنامج</b>: ملف واحد <code>plastic_manager.html</code> (~٦٠٠٠ سطر، ~٥٥٠ ك.ب) فيه الـ CSS والـ JS والخطوط مدمجة base64. حالة واحدة <code>DB</code>، و<code>render()</code> بيبني الشاشة كلها من الأول. الحفظ في localStorage تلقائياً وفي ملف JSON بـ File System Access API. مفيش build ولا dependencies ولا شبكة.</li>
+  <li><b>المحاسبة</b>: <code>computed()</code> (سطر ~1131) و<code>computedCash()</code> (~1168) و<code>computedPL()</code> (~1204) مصدر واحد للأرقام، و<code>buildRecord()</code> (~3593) مصدر واحد لتحويل الفورم لسجل، ومستخدم في الحفظ وفي لوحة التأثير.</li>
+  <li><b>الخدمة</b>: Node/Express (<code>server.js</code> ~٨٠٠ سطر)، تخزين Postgres أو ملف JSON، و<code>query-engine.js</code> بيحسب كل أرقام الإجابات من لقطة بيرفعها البرنامج. النموذج (Gemini/Grok/Claude) بيفهم الجملة بس.</li>
+</ul>
+<h3>نقاط القوة</h3>
+<ul>
+  <li>فصل واضح بين الحساب والعرض، و«النموذج ما بيحسبش أرقام» مطبّق فعلاً في الخدمة وفي المستشار.</li>
+  <li>طبقة حماية للمدخلات (<code>_sanitizeData</code>، <code>esc</code>، <code>num</code>)، وتراجع (undo) لكل حذف، ولوحة تأثير قبل الحفظ.</li>
+  <li>التعليقات في الكود بتشرح «ليه» مش «إيه».</li>
+</ul>
+<h3>نقاط الضعف والدين التقني</h3>
+<ul>
+  <li>ملف واحد ضخم: صعب الاختبار بالأجزاء (Unit tests) من غير متصفح. أي تعديل محتاج بحث نصي حذر.</li>
+  <li>أنماط كتير inline (<code>style:'…'</code>) بدل classes. وجداول الحسابات (<code>renderAccounts</code> ~5413) مبنية يدوياً بدل <code>makeTable</code>.</li>
+  <li>حسابات زي <code>computed()</code> بتتنده كذا مرة في نفس الـ render. مش مشكلة بالحجم الحالي (قِسْت ١٥ مللي ثانية للمتابعة على دفاتر ٢٠ ضعف التجريبية: ٦٢٠ صفقة و٢٢٠ طرف).</li>
+  <li>في الخدمة: <code>server.js</code> فيه البرومبتات والراوتس والتخزين والتشفير في ملف واحد. ونهايات السطور مختلطة بين الملفات (CRLF في <code>server.js</code> وLF في غيره). سبتها زي ما هي.</li>
+</ul>
+
+<h2>٣. الاختبارات</h2>
+<table>
+  <tr><th>الاختبار</th><th>قبل</th><th>بعد</th><th>بيغطي إيه</th></tr>
+  <tr><td><code>drafts-service/test/avatar-smoke.js</code> (موجود)</td><td>ناجح</td><td>ناجح</td><td>SSO، واجهة الأفاتار، القصص، الجداول</td></tr>
+  <tr><td><code>tests/e2e_app.py</code> (جديد)</td><td><span class="hi">65 ناجح / 8 فاشل</span> على الكود الأصلي</td><td>74 ناجح / 0</td><td>المحاسبة مقابل حساب مستقل، كل الشاشات، الفورمز والتحقق، الحذف والتراجع، الحفظ والتحميل، ملف متلغّم (HTML في كل نص، أرقام نصية، سجلات null)، صندوق المراجعة، التوزيع، الموبايل، المستشار مع نموذج وهمي</td></tr>
+  <tr><td><code>tests/e2e_insights.py</code> (جديد)</td><td>الميزة ما كانتش موجودة</td><td>75 ناجح / 0</td><td>أعمار الديون مقابل حساب مستقل لكل الـ ١١ طرف، القايمة وترتيبها، السيولة والتوزيع الآمن، الإجراءات، واتساب، المواعيد، مهلة لكل طرف، الإعدادات والتأجيل، حارس الأرقام والإخفاء والأخطاء، XSS، الموبايل، نص الليل في القاهرة</td></tr>
+  <tr><td><code>drafts-service/test/service-check.js</code> (جديد)</td><td>غير موجود (2 من الحالات كانت هتفشل على الكود القديم: صياغة رصيد المورد، وتخمين الأكواد)</td><td>24 ناجح / 0</td><td>«مين متأخر؟»، الصلاحيات، الحدود، الأرقام الغلط في الـ id، الهيدرز، قفل العنوان بعد أكواد غلط</td></tr>
+  <tr><td><code>tests/screenshots.py</code> (جديد)</td><td>غير موجود</td><td>8 ناجح / 0</td><td>تشغيل الخدمة mock، ربط البرنامج بيها فعلياً: رفع الأسماء واللقطة، سؤال من الميدان، مسودة بتتسحب وتتعتمد وتتعلّم approved على الخدمة، صفحة الميدان على موبايل</td></tr>
+</table>
+<p><b>إجمالي بعد</b>: 181 فحص (74 + 75 + 24 + 8) + smoke الأفاتار، كلها ناجحة. الفحوصات الفاشلة على الكود الأصلي: 7 منهم باجز حقيقية (جدول ٤)، وواحد كان من الاختبار نفسه (متغير بيفضل من فحص سابق) واتصلح في الاختبار.</p>
+<h3>اللي ما اتختبرش</h3>
+<ul>
+  <li><code>test/story-check.js</code> و<code>story-check-hard.js</code>: محتاجين نموذج حقيقي ومفتاح ونت. <b>ما اتشغلوش</b> (ممنوع نبعت بيانات لخدمات خارجية). البرومبت اتغير فيه سطرين (تاريخ القاهرة، وسطر «مين متأخر»)، فيستحسن تشغلهم مرة بمفتاح قبل النشر.</li>
+  <li>Postgres (Neon): كل الاختبارات على الـ file store. التعديلات في الخدمة ما لمستش <code>PgStore</code> غير إن الـ id غير الرقمي بقى بيرجع 404 قبل ما يوصل للقاعدة.</li>
+  <li>الحفظ في ملف عن طريق File System Access API (محتاج ضغط مستخدم حقيقي). اختبرت <code>buildPayload</code>/<code>loadJsonText</code> والـ localStorage بدلها.</li>
+  <li>التسجيل الصوتي في صفحة الميدان، والأفاتار (Matrix) الحقيقي.</li>
+  <li>الطباعة (<code>window.open</code>) اتشافت بالكود بس، ما اتطبعتش.</li>
+</ul>
+
+<h2>٤. الباجز اللي اتلقت واتصلحت</h2>
+<table style="table-layout:fixed">
+  <colgroup><col style="width:5%"><col style="width:35%"><col style="width:8%"><col style="width:15%"><col style="width:22%"><col style="width:15%"></colgroup>
+  <tr><th>#</th><th>الباج</th><th>الخطورة</th><th>الملف</th><th>الإصلاح</th><th>الاختبار</th></tr>
+  <tr><td>B1</td><td>فتح أي ملف JSON مش ملف بيانات (ملف مسودات، package.json …) كان بيتقبل كدفاتر فاضية، يمسح الشاشة ويعلّمها «محفوظ» ويكتب الفاضي فوق النسخة التلقائية في المتصفح. السبب: التحقق كان بعد <code>_sanitizeData</code> اللي بتحوّل أي قايمة ناقصة لـ []</td><td class="hi">عالية</td><td><code>plastic_manager.html</code> <code>loadJsonText</code></td><td>التحقق على الملف الخام قبل أي تعديل، ورسالة واضحة إن الدفاتر زي ما هي</td><td>e2e_app «a file that is not a ledger is refused…»</td></tr>
+  <tr><td>B2</td><td>Stored XSS: التاريخ في كشف الحساب والطباعة، وتاريخ وملاحظة التقفيل، كانوا بيتحطوا HTML من غير escape. ملف معدّل كان يشغّل JS (اتقاس: 27 تنفيذ)</td><td class="md">متوسطة</td><td>نفس الملف: <code>showStatementOverlay</code>، <code>printPartyStatement</code>، التقفيلات</td><td><code>esc()</code> في الأماكن دي + تنضيف التواريخ وقت الاستيراد (نص بس من غير &lt;&gt;&amp;"')</td><td>e2e_app «HTML inside imported text never runs» + e2e_insights لشاشات المتابعة</td></tr>
+  <tr><td>B3</td><td>حذف مورد/عميل/شريك عليه حركات كان مسموح: الصفقات تفضل باسم «-»، ورصيده يختفي من جدول الحسابات وهو لسه في الميزانية (الشاشتين يختلفوا)</td><td class="md">متوسطة</td><td><code>deleteParty</code> / <code>partyUsage</code> (جديد)</td><td>الحذف بيترفض برسالة فيها عدد الحركات. الطرف من غير حركات بيتحذف زي الأول بتراجع</td><td>e2e_app «a customer with sales cannot be deleted»، «a partner with a distribution…»</td></tr>
+  <tr><td>B4</td><td><code>today()</code> كانت UTC: أي حركة بين ١٢ بالليل و٢ أو ٣ الفجر في مصر كانت بتتسجل بتاريخ امبارح، وفلتر «الشهر الحالي» يوم ١ بالليل كان بيجيب الشهر اللي فات</td><td class="md">متوسطة</td><td><code>today</code>، <code>periodBounds</code></td><td>التاريخ المحلي</td><td>e2e_app + e2e_insights (ساعة مثبتة على ٠٠:٣٠ القاهرة)</td></tr>
+  <tr><td>B5</td><td>سجل من غير id أو بـ id مكرر (ملف متعدّل يدوي): التعديل/الحذف بيلمس كل السجلات اللي ليها نفس الـ id، و<code>Math.max</code> على id نصي بيدّي NaN</td><td class="lo">منخفضة</td><td><code>loadJsonText</code></td><td>id جديد للسجل الناقص أو المكرر وقت التحميل، والملفات السليمة ما بتتغيرش</td><td>e2e_app «records without an id get one on load»</td></tr>
+  <tr><td>S1</td><td>تخمين أكواد الميدان: الحد (٢٠/دقيقة) كان على <code>/login</code> بس، وأي endpoint تاني بياخد <code>X-Field-Code</code> من غير حد. والأكواد ٤ لـ ٦ أرقام. ووراء بروكسي Render كل الموبايلات بتبان عنوان واحد</td><td class="hi">عالية</td><td><code>server.js</code> <code>fieldAuth/ownerAuth/serviceAuth</code></td><td>عدّاد غلطات لكل عنوان على كل الـ endpoints (٢٠ في ربع ساعة افتراضياً، <code>MAX_AUTH_FAILS</code>) وبعدها 429، و<code>TRUST_PROXY=1</code> في <code>render.yaml</code></td><td>service-check «wrong codes»</td></tr>
+  <tr><td>S2</td><td>الخدمة كانت بتقول للنموذج تاريخ UTC وتقويم ١٤ يوم UTC: «النهارده» و«امبارح» غلط من ١٢ لـ ٢ بالليل</td><td class="md">متوسطة</td><td><code>systemPrompt</code>، <code>conversePrompt</code></td><td>تاريخ القاهرة (<code>cairoToday/cairoDaysAgo</code>)</td><td>بالكود (محتاج story-check بنموذج حقيقي)</td></tr>
+  <tr><td>S3</td><td>مورد دفعناله زيادة (رصيد سالب) كان الرد يقول «ليه عندنا مقدم»، يعني العكس</td><td class="lo">منخفضة</td><td><code>query-engine.js</code> <code>balPhrase</code></td><td>«لينا عنده … (دافعين له زيادة)»</td><td>service-check</td></tr>
+  <tr><td>S4</td><td>مفيش حد لطول الرسالة ولا لحجم حقول المسودة، والـ id غير الرقمي كان بيوصل لـ Postgres ويرجع 500</td><td class="lo">منخفضة</td><td><code>server.js</code></td><td>٤٠٠٠ حرف للرسالة، ٢٠ ك.ب للحقول (413)، 404 للـ id غير الرقمي</td><td>service-check</td></tr>
+  <tr><td>S5</td><td><code>dev-start.js</code> كان بيسمع على كل الشبكات، والـ mock على بورت ثابت؛ ومفيش <code>nosniff</code></td><td class="lo">منخفضة</td><td><code>dev-start.js</code>، <code>mock-gemini.js</code>، <code>server.js</code></td><td>127.0.0.1 افتراضياً (<code>HOST</code>)، <code>MOCK_AI_PORT</code>/<code>SMOKE_PORT</code>، هيدرز أمان</td><td>service-check «security headers»</td></tr>
+</table>
+
+<h2>٥. باجز ومخاطر لسه مفتوحة</h2>
+<table>
+  <tr><th>الخطر</th><th>الأثر</th><th>المقترح</th></tr>
+  <tr><td>البيانات في متصفح جهاز واحد + ملف JSON. مفيش تزامن بين شريكين</td><td>نسختين مختلفتين من الدفاتر لو اتنين شغالين</td><td>تحديد «جهاز رئيسي»، أو مرحلة جاية: مزامنة مشفّرة عبر الخدمة</td></tr>
+  <tr><td>مفاتيح Gemini/Grok للمستشار في localStorage نص صريح</td><td>أي حد على الجهاز أو أي XSS يقدر يقراها</td><td>التنبيه موجود في الشاشة. ممكن تتنقل للخدمة (اللي بتشفّرها أصلاً)</td></tr>
+  <tr><td>أعمار الديون بتفترض FIFO لأن التحصيل مش مربوط بفاتورة</td><td>لو عميل بيدفع فاتورة بعينها، العمر المعروض ممكن يختلف عن الحقيقة</td><td>مقبول لتجارة آجل على حساب جاري. لاحقاً: ربط اختياري للتحصيل بفاتورة</td></tr>
+  <tr><td>رقم المتابعة في القايمة (عاجل + مهم) أقل من عدد التبويب (الكل)</td><td>لخبطة بسيطة</td><td>متشرح في الدليل. ممكن نعرض الاتنين</td></tr>
+  <tr><td>صفحة الميدان الكلاسيك بتعرض لـ «مين متأخر؟» جدول الأرصدة العادي تحت الرد</td><td>الرد المكتوب صح، والجدول بيوري الرصيد مش المتأخر</td><td>تعديل صغير في <code>capture.html</code> (ما لمستهوش علشان ما يتكسرش حاجة ما اتختبرتش)</td></tr>
+  <tr><td>CORS <code>*</code> في الخدمة</td><td>مقبول لأن المصادقة بتوكن مش cookies</td><td>لو اتضاف أي cookie: تقييد الـ origins</td></tr>
+  <tr><td>الـ AES key للإعدادات مشتق من <code>OWNER_TOKEN</code></td><td>تغيير التوكن بيضيّع المفاتيح المحفوظة (متوثق)</td><td>مفتاح تشفير منفصل اختياري</td></tr>
+  <tr><td>story-check ما اتشغلش</td><td>تغيير البرومبت ما اتجربش على نموذج حقيقي</td><td>تشغيله مرة بمفتاح قبل النشر</td></tr>
+</table>
+
+<h2>٦. تحليل السوق</h2>
+<h3>المنافسين واللي بيقدموه</h3>
+<table>
+  <tr><th>الأداة</th><th>إيه اللي فيها</th><th>اللي ناقص لتاجر خامات</th></tr>
+  <tr><td>Excel / دفتر</td><td>مرن ومجاني ومعروف</td><td>مفيش متوسط تكلفة تلقائي، ولا أعمار ديون، ولا تنبيه</td></tr>
+  <tr><td>دفترة (Daftra)</td><td>ERP سحابي عربي: محاسبة وفواتير ومخزون، متوافق مع الفاتورة الإلكترونية المصرية، من ~10$ شهرياً</td><td>عام لكل الأنشطة، مفيش وزن ميزان/هالك/أماكن بالشكل ده، ومفيش «ربح موزّع آمن»</td></tr>
+  <tr><td>قيود (Qoyod)</td><td>محاسبة سحابية للشركات الصغيرة، ذمم دائنة ومدينة، POS، ربط WhatsApp، باقات سنوية</td><td>مركّز على السعودية (الزكاة والفاتورة السعودية)، مش على مصر</td></tr>
+  <tr><td>Odoo</td><td>«Follow-up levels»: تذكير تلقائي بالفواتير المتأخرة بالإيميل والـ SMS والبريد، وسجل للمتابعة</td><td>تقيل في الإعداد والتكلفة لشراكة صغيرة، ومحتاج محاسب</td></tr>
+  <tr><td>WhatsApp</td><td>القناة الفعلية للتعامل مع العملاء في مصر</td><td>مفيش ربط بالأرقام</td></tr>
+</table>
+<h3>احتياجات المستخدم (مصر)</h3>
+<ul>
+  <li><b>التحصيل والآجل</b>: المهلة الرسمية في مصر غالباً ٣٠ لـ ٦٠ يوم والسداد الفعلي بيتأخر، والتأخير ساعات بيبقى أداة إدارة سيولة متعمدة (Allianz Trade). والدراسات المصرية بتحط تأخير الدفعات وأسعار الخامات ضمن أهم أسباب عدم استقرار السيولة، وبتقول إن الشركات الصغيرة صعب تاخد تمويل.</li>
+  <li><b>تقلب الأسعار</b>: أسعار HDPE وPP في مصر بتمشي ورا خام برنت بفارق ٤ لـ ٦ أسابيع ومع الجنيه (Mordor Intelligence، مصدر استرشادي)، ومصر بتستورد حوالي ٤٠٪ من خاماتها. وفي ٢٠٢٦ أسعار بعض الخامات المعاد تدويرها زادت لحد ٦٠٪ (Arab News / AFP). يعني الهامش ممكن يتقلب بين صفقتين.</li>
+  <li><b>واتساب</b>: القناة الأساسية للتجار. الأرقام المنشورة عن نسبة الاستخدام من شركات بتبيع أدوات واتساب، فاعتبرتها مؤشر مش رقم مؤكد.</li>
+</ul>
+<h3>الفجوات اللي البرنامج كان فيها، واللي اتعمل</h3>
+<ol>
+  <li>مفيش «أعمل إيه النهارده»: الأرقام موجودة بس محتاجة حد يدوّر. ← شاشة المتابعة.</li>
+  <li>مفيش أعمار ديون ولا مهلة لكل عميل (موجودة في Odoo/Daftra). ← أعمار الديون + مهلة لكل طرف.</li>
+  <li>مفيش تذكير بالتحصيل (Odoo بيعمله بالإيميل). ← رسالة واتساب من كشف الحساب (يدوية، لأن واتساب هو القناة هنا).</li>
+  <li>مفيش متابعة لسعر الشراء والهامش في سوق متقلب. ← الهوامش والأسعار + تنبيه ارتفاع/نزول السعر والبيع تحت التكلفة.</li>
+  <li>التوزيع بيبص للربح مش للخزنة. ← أقصى توزيع آمن.</li>
+</ol>
+<h3>المصادر</h3>
+<ul class="muted">
+  <li>Daftra على Capterra: <a href="https://www.capterra.ae/software/1024510/daftra">capterra.ae/software/1024510/daftra</a> · الفاتورة الإلكترونية المصرية: <a href="https://daftra.com/en/egy-electronic-invoice">daftra.com/en/egy-electronic-invoice</a></li>
+  <li>Qoyod: <a href="https://www.capterra.com/p/10033103/Qoyod/">capterra.com/p/10033103/Qoyod</a> · <a href="https://www.qoyod.com/en/knowledge-base/qoyod-pricing-plans-features-pricing-limits-how-to-choose-an/">qoyod.com pricing plans</a> · <a href="https://dupple.com/reviews/qoyod">dupple.com/reviews/qoyod</a></li>
+  <li>Odoo follow-up: <a href="https://www.odoo.com/documentation/18.0/applications/finance/accounting/payments/follow_up.html">odoo.com/documentation/18.0/…/follow_up.html</a></li>
+  <li>Allianz Trade، تحصيل الديون في مصر: <a href="https://www.allianz-trade.com/en_global/economic-research/collection-complexity/egypt.html">allianz-trade.com/…/collection-complexity/egypt.html</a></li>
+  <li>تمويل الشركات الصغيرة في مصر: <a href="https://journals.ekb.eg/article_395934.html">journals.ekb.eg/article_395934.html</a> · رأس المال العامل: <a href="https://ideas.repec.org/a/jfr/afr111/v7y2018i2p155.html">ideas.repec.org/a/jfr/afr111/v7y2018i2p155.html</a> · سيولة المقاولين: <a href="https://civilejournal.org/index.php/cej/article/download/4133/pdf">civilejournal.org/…/4133/pdf</a></li>
+  <li>أسعار البلاستيك في مصر: <a href="https://www.arabnews.pk/node/2651425/middle-east">arabnews.pk/node/2651425</a> · <a href="https://kuwaittimes.com/article/46659/business/egypts-garbage-city-recyclers-reap-gains-from-plastic-squeeze/">kuwaittimes.com/article/46659</a> · <a href="https://www.mordorintelligence.com/de/industry-reports/egypt-plastic-packaging-market">mordorintelligence.com (Egypt plastic packaging)</a> · <a href="https://www.chemorbis.com/en/premium-plastics-news/Egypt-s-SIDPEC-unveils-Jan-PE-offers-to-local-market/2025/01/03/921915">chemorbis.com SIDPEC PE offers</a> · <a href="https://unido.org/sites/default/files/unido-publications/2024-12/Plastic_value_chain_in_Egypt.pdf">UNIDO: Plastic value chain in Egypt</a></li>
+  <li>واتساب في مصر (مصادر تجارية، مؤشر بس): <a href="https://chatdaddy.tech/blog/whatsapp-marketing-egypt">chatdaddy.tech/blog/whatsapp-marketing-egypt</a> · <a href="https://www.statista.com/statistics/1145037/whatsapp-users-in-egypt/">statista.com WhatsApp users in Egypt</a></li>
+</ul>
+
+<h2>٧. الفيتشرز اللي اتضافت</h2>
+<table>
+  <tr><th>الميزة</th><th>ليه (احتياج السوق)</th><th>الاستخدام</th><th>الملفات</th><th>اتختبرت إزاي</th></tr>
+  <tr><td><b>١. تنبيهات اليوم + توصيات</b> (insights / recommendations)</td><td>الآجل والسيولة أكبر وجع، والأرقام محتاجة تتحول لشغل</td><td>القايمة «المتابعة والتنبيهات» + كارت في لوحة التحكم + رقم في القايمة. كل بند: الحقيقة، التوصية، زراير تنفيذ، تأجيل</td><td><code>plastic_manager.html</code>: <code>buildInsights</code>، <code>renderFollowup</code>، <code>fuDashboardCard</code></td><td>e2e_insights §2-5</td></tr>
+  <tr><td><b>٢. أعمار الديون + مهلة لكل طرف</b></td><td>المهلة ٣٠-٦٠ والتأخير شائع، وOdoo/Daftra بيعملوا aging</td><td>تبويب «أعمار الديون»، والمهلة في فورم العميل/المورد</td><td><code>partyAging</code>، <code>creditDays</code> (حقل اختياري جديد)</td><td>مقارنة بحساب Python مستقل لكل الأطراف، وتطابق مع كشف الحساب والميزانية</td></tr>
+  <tr><td><b>٣. الهوامش وحركة الأسعار</b></td><td>أسعار بتتبع البترول والجنيه</td><td>تبويب «الهوامش والأسعار» وتنبيهات ±٥٪ والبيع تحت التكلفة</td><td><code>materialStats</code></td><td>PP: ‎44.5 مقابل 39.06 = ‎+13.9٪، الهامش مقابل حساب مستقل</td></tr>
+  <tr><td><b>٤. السيولة والتوزيع الآمن</b></td><td>الربح على الورق مش في الخزنة</td><td>أرقام الخزنة في المتابعة، وسطر في شاشة التوزيع</td><td><code>cashOutlook</code></td><td>مقابل حساب مستقل، وحالة خزنة ضعيفة</td></tr>
+  <tr><td><b>٥. مواعيد المتابعة</b> (reminders)</td><td>وعود السداد والشيكات بتتنسي</td><td>تبويب «مواعيدي»، أو من رسالة التذكير. بتظهر قبلها بـ ٣ أيام</td><td><code>DB.reminders</code> (قايمة اختيارية جديدة في الملف)، فورم <code>reminder</code></td><td>حفظ وتحميل، ملف قديم من غيرها، تم/تراجع/حذف</td></tr>
+  <tr><td><b>٦. رسالة تحصيل لواتساب</b></td><td>واتساب هو قناة التجار</td><td>📲 من البند أو جدول الأعمار ← نسخ أو wa.me</td><td><code>fuMessageText</code>، <code>fuPhone</code>، <code>fuOpenMessage</code></td><td>الرسالة من الكشف، تحويل الأرقام المصرية، من غير رقم = نسخ بس</td></tr>
+  <tr><td><b>٧. صياغة بالذكاء الاصطناعي بحارس أرقام</b></td><td>قاعدة المشروع: النموذج بيصيغ بس</td><td>«✨ رتّبها وصيغها» (بنفس مفتاح المستشار). من غير مفتاح: الشاشة كاملة بقواعد</td><td><code>fuAiBrief</code>، <code>fuNumbersOk</code></td><td>نموذج وهمي: ترتيب، رفض رقم مخترع، إخفاء الأسماء، HTML، رد مش JSON، خطأ 429</td></tr>
+  <tr><td><b>٨. «مين متأخر في السداد؟» من الميدان</b></td><td>المندوب محتاج يعرف قبل ما يروح للعميل</td><td>سؤال بالكلام في صفحة الميدان (صلاحية الفلوس)</td><td><code>buildFieldSnapshot</code> (أعمار)، <code>query-engine.js</code> <code>overdueOnly</code>، <code>avatar-speech.js</code>، البرومبت</td><td>service-check + ربط حقيقي في screenshots.py</td></tr>
+</table>
+<p class="muted">إعدادات الحدود والتأجيل والصياغة الأخيرة على الجهاز بس (<code>pm_followup</code>)، مش في ملف البيانات. الحقول الجديدة في الملف (<code>reminders</code>، <code>creditDays</code>) اختيارية، والملفات القديمة بتفتح زي ما هي.</p>
+
+<h2>٨. الافتراضات</h2>
+<ul>
+  <li>«متأخر» = عدّى مهلة السداد (٣٠ يوم افتراضي للعميل والمورد، تتغير) من تاريخ الصفقة. مفيش تاريخ استحقاق منفصل في البيانات.</li>
+  <li>التحصيلات والدفعات على الحساب بتسدد أقدم صفقة مفتوحة الأول (FIFO)، والكاش جوه الصفقة بيسددها هي.</li>
+  <li>المخزون «راكد» بعد ٤٥ يوم من آخر بيع (أو آخر شراء لو ما اتباعش).</li>
+  <li>تغيّر السعر = آخر صفقة شراء مقابل المتوسط المرجّح لكل اللي قبلها، والتنبيه عند ±٥٪ والخامة لسه في المخزن.</li>
+  <li>متوسط المصروف الشهري = مصروفات آخر ٩٠ يوم (ومصاريف الصفقات) ÷ ٣، أو على عمر الدفاتر لو أقل. والاحتياطي قبل التوزيع شهر.</li>
+  <li>رقم الموبايل المصري: <code>01xxxxxxxxx</code> بيتحول لـ <code>201…</code> لواتساب. أي شكل تاني = نسخ بس.</li>
+  <li>البرنامج ما بيبعتش رسايل لوحده أبداً (قرار متعمد: الإرسال قرار صاحب الشغل).</li>
+  <li>ملف البرنامج LF مش CRLF (اتأكدت من النسخة الأصلية: صفر CR)، فحافظت على LF. ملفات الخدمة اللي كانت CRLF فضلت CRLF.</li>
+  <li>نسخة من الملفين قبل التعديل في <code>Archive/</code> (زي عادة المشروع).</li>
+</ul>
+
+<h2>٩. جاهزية الـ deployment</h2>
+<table>
+  <tr><th>البند</th><th>الحالة</th></tr>
+  <tr><td>البرنامج (ملف محلي)</td><td>✓ جاهز: افتح الملف. الملفات القديمة بتفتح من غير تحويل</td></tr>
+  <tr><td>الخدمة: الاختبارات المحلية (file store + mock)</td><td>✓ ناجحة</td></tr>
+  <tr><td>الخدمة: Postgres</td><td>⚠ ما اتختبرتش الليلة (ما لمستش كود التخزين)</td></tr>
+  <tr><td>الخدمة: نموذج حقيقي</td><td>⚠ story-check محتاج يتشغل بمفتاح</td></tr>
+  <tr><td><code>TRUST_PROXY=1</code> على Render</td><td>⚠ متضاف في <code>render.yaml</code>. لو الخدمة متعملة يدوي مش Blueprint، لازم يتضاف من الداشبورد</td></tr>
+  <tr><td>الأكواد</td><td>⚠ يستحسن ٦ أرقام أو أكتر لكل شخص (الحد بقى يحمي، بس الكود الطويل أحسن)</td></tr>
+</table>
+<h3>الخطوات بالترتيب</h3>
+<ol>
+  <li>راجع الـ diff (<code>git diff</code>) واعمل commit لو موافق.</li>
+  <li><code>cd drafts-service &amp;&amp; node test/service-check.js &amp;&amp; node test/avatar-smoke.js</code></li>
+  <li>شغّل <code>story-check.js</code> مرة بمفتاح حقيقي.</li>
+  <li>على Render: ضيف <code>TRUST_PROXY=1</code>، وبعدين deploy.</li>
+  <li>من البرنامج: «رفع لقطة للميدان» مرة علشان أعمار الديون توصل، وجرّب «مين متأخر في السداد؟» من الموبايل.</li>
+</ol>
+
+<h2>١٠. فيتشرز مقترحة للمرحلة الجاية</h2>
+<ol>
+  <li><b>تذكير يومي لصاحب الشغل على الموبايل</b>: الخدمة تعرض «تنبيهات اليوم» في صفحة الميدان لصاحب صلاحية finance (الحساب موجود، محتاج نقله للقطة).</li>
+  <li><b>ربط التحصيل بفاتورة</b> (اختياري) علشان أعمار الديون تبقى دقيقة للعميل اللي بيدفع فاتورة بعينها.</li>
+  <li><b>سعر السوق اليومي</b> يتكتب يدوي لكل خامة، والهامش يتحسب على سعر السوق مش آخر بيعة (من غير مصدر خارجي أوتوماتيك).</li>
+  <li><b>تقرير شهري PDF</b> لكل شريك: نصيبه، سحوباته، وتطور الربح.</li>
+  <li><b>تقسيم الملف</b> لموديولات مع build بسيط بيرجع ملف واحد، علشان unit tests للحسابات من غير متصفح.</li>
+  <li><b>نسخ احتياطي مشفّر</b> للدفاتر على الخدمة (اختياري ومقفول افتراضياً).</li>
+  <li>تحديث جدول «مين متأخر» في صفحة الميدان الكلاسيك يعرض عمود المتأخر.</li>
+</ol>
+</body>
+</html>

@@ -20,6 +20,8 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
+      - key: TRUST_PROXY
+        value: "1"           # Render sits in front of the service: count wrong codes per phone, not per proxy
       # The avatar (Matrix) — optional; all four together switch it on, none = the classic page only.
       - key: FIELD_MATRIX_URL
         sync: false

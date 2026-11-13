@@ -16,6 +16,7 @@ function converse(text, audio, hasPending) {
   if (/اشتريت.*وبعت/.test(t)) return R({ intent: 'record', drafts: [{ type: 'purchase', fields: { party: 'هاني عيسي', material: 'ABS', qty: 2000, unit: 'kg', price: 27 }, missing: [], question: 'تاريخ الشراء إيه؟', reply: '' }, { type: 'sale', fields: { party: 'مصنع فلكس', material: 'PP', qty: 1000, unit: 'كيلوجرام', price: 40, date: '2026-10-24' }, missing: [], question: '', reply: '' }] });
   if (/اشتريت/.test(t)) return R({ intent: 'record', draft: { type: 'purchase', fields: { date: ymd(new Date()), party: 'هاني عيسي', material: 'ABS', qty: 2070, unit: 'كيلوجرام', price: 27, paid: 30000, txExpenses: [{ desc: 'نقل', amount: 1000 }] }, missing: [], question: '', reply: 'شراء ٢٠٧٠ كيلو ABS من هاني عيسي بسعر ٢٧، مدفوع ٣٠ ألف' } });
   if (/صرفت|دفعت.*توكتوك/.test(t)) return R({ intent: 'record', draft: { type: 'expense', fields: { cat: 'نقل', amount: 350, desc: 'توكتوك' }, missing: [], question: '', reply: 'مصروف نقل ٣٥٠' } });
+  if (/متأخر/.test(t)) return R({ intent: 'query', query: { entity: 'balances', overdueOnly: true, ...(/موردين|علينا/.test(t) ? { balanceSide: 'suppliers' } : { balanceSide: 'customers' }) } });
   if (/وجمال|و جمال/.test(t)) return R({ intent: 'query', query: { entity: 'balances', party: 'جمال ابو الحسن' } });
   if (/حساب\s+(\S+)/.test(t)) { const m = t.match(/حساب\s+(\S+(?:\s\S+)?)/)[1].replace(/\s?(كام|ايه|إيه)\??$/, '').replace('؟', ''); return R({ intent: 'query', query: { entity: 'balances', party: m } }); }
   if (/مين باع|باع/.test(t)) return R({ intent: 'query', query: { entity: 'deals', kinds: ['sale'], from: daysAgo(30), aggregate: 'group_party', sort: 'largest' } });
@@ -65,4 +66,4 @@ http.createServer((req, res) => {
       res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: out }] } }] }));
     } catch (e) { res.statusCode = 400; res.end(JSON.stringify({ error: { message: e.message } })); }
   });
-}).listen(8793, () => console.log('mock gemini on :8793'));
+}).listen(+process.env.MOCK_AI_PORT || 8793, '127.0.0.1', function () { console.log('mock gemini on :' + this.address().port); });   // MOCK_AI_PORT: run beside another copy

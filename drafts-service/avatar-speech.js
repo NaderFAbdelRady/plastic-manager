@@ -70,6 +70,7 @@ function tableFor(res, id = 't', label = '') {
     const rows = Object.entries(res.data || {}).filter(([k, v]) => typeof v === 'number' && FINANCE_LABEL[k] !== undefined).map(([k, v]) => [text(FINANCE_LABEL[k]), cell(Math.round(v))]);
     return rows.length > 1 ? tbl('t', 'الماليات', ['البند', 'المبلغ'], rows) : null;
   }
+  if (res.entity === 'balances' && res.overdueOnly) return (res.rows || []).length ? tbl('t', 'المتأخرين في السداد', ['الاسم', 'النوع', 'المتأخر', 'أقدم فاتورة'], res.rows.map(x => [text(x.party), text(x.side === 'customers' ? 'عميل' : 'مورد'), cell(Math.round(x.overdue)), text(x.oldestDay + ' (' + x.days + ' يوم)')])) : null;
   if (res.entity === 'balances') return (res.rows || []).length > 1 ? tbl('t', 'الأرصدة', ['الاسم', 'النوع', 'الرصيد'], res.rows.map(x => [text(x.party), text(x.side === 'customers' ? 'عميل' : 'مورد'), text(balText(x))])) : null;
   if (res.entity === 'inventory') return (res.rows || []).length > 1 ? tbl('t', 'المخزون', ['الخامة', 'المخزون'], res.rows.map(x => [text(x.material), text(`${fmtN(x.stock)} ${x.unit || 'كجم'}`)])) : null;
   if (res.groups && res.groups.length) {

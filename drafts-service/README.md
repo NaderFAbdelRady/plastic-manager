@@ -89,6 +89,8 @@ set `GEMINI_API_KEY` to enable the voice / free-text understanding.
    | `XAI_API_KEY` / `XAI_MODEL` | for `AI_PROVIDER=grok` (model default `grok-3`) |
    | `GEMINI_MODEL` | `gemini-2.5-flash` (default) |
    | `FIELD_SCOPES` | optional, e.g. `أحمد:deals+money` |
+   | `TRUST_PROXY` | `1` on Render (set in `render.yaml`): wrong codes are then counted per phone, not per proxy |
+   | `MAX_AUTH_FAILS` | optional, default 20: wrong codes/tokens per address per 15 minutes before it is locked out |
 
 4. Open `https://<service>.onrender.com/` on a phone → the capture page. Give each person the URL and their own code.
 5. In the local app → **صندوق المراجعة → ربط خدمة المسودات**: paste the URL and the owner token,
@@ -124,7 +126,10 @@ from the query engine's rows — never by a model — and dates carry their week
 | `FIELD_SERVICE_KEY` | a long random string (16+ characters); the same value as `MATRIX_PLASTIC_SERVICE_KEY` on Matrix |
 
 On Matrix set `MATRIX_PLASTIC_URL` (this service's public address) and `MATRIX_PLASTIC_SERVICE_KEY`, and create a deployment for the persona «مساعدة المكتب» with this
-service's address as its only allowed site and "require login" on. Try it without a model or a Matrix: `node test/avatar-smoke.js`.
+service's address as its only allowed site and "require login" on. Try it without a model or a Matrix: `node test/avatar-smoke.js`. The whole service (queries, limits, wrong-code lockout): `node test/service-check.js`.
+
+«مين متأخر في السداد؟» is answered from the ages the app adds to each balance in the snapshot (`oldest`, `overdue`, `terms`); the list is read
+out exactly as computed, never re-worded by the model. An older snapshot without ages gets «المكتب لسه ما رفعش أعمار الديون».
 
 ## API
 

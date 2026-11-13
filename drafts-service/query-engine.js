@@ -11,6 +11,8 @@ const norm = s => String(s == null ? '' : s).trim().replace(/\s+/g, ' ').replace
 const nameMatch = (name, q) => { const a = norm(name), b = norm(q); return !!a && !!b && (a === b || a.includes(b) || b.includes(a)); };
 const isoDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '') ? s : null;
 const hasNum = v => v != null && v !== '' && Number.isFinite(+v);
+const cairoToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+const daysBetween = (a, b) => Math.max(0, Math.round((Date.UTC(...b.split('-').map((x, i) => i === 1 ? x - 1 : +x)) - Date.UTC(...a.split('-').map((x, i) => i === 1 ? x - 1 : +x))) / 864e5));
 
 function parseScopes(s) {
   // "عز:deals+money,أحمد:all" → {عز:Set, أحمد:Set}. A person who is not listed gets everything.
@@ -61,7 +63,15 @@ function runQuery(q, snap, allowed) {
   if (entity === 'balances') {
     const sides = q.balanceSide === 'suppliers' ? ['suppliers'] : q.balanceSide === 'customers' ? ['customers'] : ['customers', 'suppliers'];
     let rows = [];
-    sides.forEach(sd => ((snap.balances && snap.balances[sd]) || []).forEach(b => rows.push({ party: b.name, side: sd, balance: b.balance, linked: b.linked || '' })));
+    // oldest / overdue / terms come from the office app (the age of the oldest open deal and the part past its credit days); older snapshots simply lack them
+    const today = q.today || cairoToday();
+    sides.forEach(sd => ((snap.balances && snap.balances[sd]) || []).forEach(b => rows.push({ party: b.name, side: sd, balance: b.balance, linked: b.linked || '',
+      ...(isoDate(b.oldest) ? { oldest: b.oldest, oldestDay: dayLabel(b.oldest), days: daysBetween(b.oldest, today), overdue: hasNum(b.overdue) ? +b.overdue : 0, terms: hasNum(b.terms) ? +b.terms : null } : {}) })));
+    if (q.overdueOnly) {                                       // «مين متأخر في السداد؟»: only balances with a part past its credit days, largest first
+      rows = rows.filter(r => r.overdue > 0.5 && (!q.party || nameMatch(r.party, q.party) || nameMatch(r.linked, q.party))).sort((a, b) => b.overdue - a.overdue);
+      const lim = Math.min(Math.max(+q.limit || 10, 1), 40);
+      return { entity, overdueOnly: true, rows: rows.slice(0, lim), count: rows.length, totalOverdue: Math.round(rows.reduce((a, r) => a + r.overdue, 0) * 100) / 100, hasAges: ((snap.balances && snap.balances.customers) || []).concat((snap.balances && snap.balances.suppliers) || []).some(b => isoDate(b.oldest)) };
+    }
     if (q.party) rows = rows.filter(r => nameMatch(r.party, q.party) || nameMatch(r.linked, q.party));
     if (hasNum(q.minAmount)) rows = rows.filter(r => Math.abs(r.balance) >= +q.minAmount);
     rows = rows.filter(r => Math.abs(r.balance) > 0.5 || q.party);
@@ -135,6 +145,11 @@ function fallbackAnswer(res, asOf) {
   if (res.denied) return 'مش مسموح لك تشوف النوع ده من البيانات.';
   if (res.entity === 'finance') return financeAnswer(res, when);
   if (res.entity === 'inventory') return res.rows.length ? res.rows.slice(0, 6).map(r => `${r.material}: ${fmtN(r.stock)} ${r.unit || 'كجم'}`).join('، ') + when : 'مفيش مخزون بالاسم ده' + when;
+  if (res.entity === 'balances' && res.overdueOnly) {
+    if (!res.hasAges) return 'المكتب لسه ما رفعش أعمار الديون — اطلب منهم يحدّثوا اللقطة من البرنامج.' + when;
+    if (!res.rows.length) return 'مفيش حد متأخر عن ميعاد السداد.' + when;
+    return `${res.count === 1 ? 'واحد متأخر' : res.count + ' متأخرين'} بإجمالي ${fmtN(res.totalOverdue)} جنيه: ` + res.rows.slice(0, 5).map(r => `${r.party} ${r.side === 'customers' ? 'عليه' : 'ليه'} ${fmtN(r.overdue)} متأخر (أقدم فاتورة ${r.oldestDay}، من ${r.days} يوم)`).join('، ') + when;
+  }
   if (res.entity === 'balances') return res.rows.length ? res.rows.slice(0, 6).map(r => `${r.party}: ${balPhrase(r)}`).join('، ') + when : 'مفيش رصيد مطابق' + when;
   if (!res.count) return 'مفيش حركات مطابقة للسؤال ده' + when;
   if (res.aggregate === 'sum' || res.aggregate === 'count') return `${res.count} حركة، إجمالي ${fmtN(res.totalAmount)} جنيه${res.totalQty ? ` وإجمالي كمية ${fmtN(res.totalQty)}` : ''}${when}`;
@@ -159,6 +174,6 @@ function balPhrase(r) {
   const v = Math.round(r.balance);
   if (!v) return 'خالص';
   if (r.side === 'customers') return v > 0 ? `عليه ${fmtN(v)}` : `ليه علينا ${fmtN(-v)}`;
-  return v > 0 ? `ليه علينا ${fmtN(v)}` : `ليه عندنا مقدم ${fmtN(-v)}`;
+  return v > 0 ? `ليه علينا ${fmtN(v)}` : `لينا عنده ${fmtN(-v)} (دافعين له زيادة)`;
 }
 module.exports = { dayLabel, SCOPES, DEFAULT_SCOPES, parseScopes, scopeFor, runQuery, fallbackAnswer, balPhrase, norm, nameMatch, KIND_AR };

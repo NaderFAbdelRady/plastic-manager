@@ -451,6 +451,30 @@ th.th-sort:hover{color:var(--accent-ink);background:var(--accent-soft)}
 .sugg{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;border:1px dashed var(--gold-border);background:var(--gold-soft);border-radius:var(--r-sm);margin-top:8px;font-size:12.5px;color:var(--ink-2)}
 @media (max-width:560px){ .loc-grid{grid-template-columns:1fr 1fr} .loc-grid.sale{grid-template-columns:1fr 1fr} .u-tiles{grid-template-columns:1fr} .field-11{grid-template-columns:1fr} }
 
+/* ── Follow-up centre (المتابعة والتنبيهات) ─────────────────────────────── */
+.fu-item{border:1px solid var(--border);border-inline-start:4px solid var(--border-strong);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:10px;background:var(--surface)}
+.fu-item:last-child{margin-bottom:0}
+.fu-item.fu-high{border-inline-start-color:var(--neg)}
+.fu-item.fu-med{border-inline-start-color:var(--warn)}
+.fu-item.fu-low{border-inline-start-color:var(--accent)}
+.fu-head{display:flex;gap:11px;align-items:flex-start}
+.fu-ic{font-size:19px;line-height:1.3;flex:0 0 auto}
+.fu-txt{min-width:0;flex:1}
+.fu-title{font-size:13.5px;font-weight:700;color:var(--ink);line-height:1.8}
+.fu-detail{font-size:12px;color:var(--muted);line-height:1.8;margin-top:2px}
+.fu-rec{font-size:12.5px;color:var(--ink-2);line-height:1.8;margin-top:7px;background:var(--surface-2);border-radius:var(--r-sm);padding:7px 11px}
+.fu-acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-inline-start:30px}
+.fu-snz{border-style:dashed}
+.fu-dash .fu-item{margin-bottom:8px;padding:9px 12px}
+.fu-headline{font-size:15px;font-weight:700;line-height:1.9;color:var(--ink)}
+.fu-stats{grid-template-columns:repeat(5,1fr);margin-bottom:0}
+.fu-sub{display:block;font-size:10.5px;color:var(--faint);font-weight:500}
+.fu-nil{color:var(--faint-2)}
+.fu-b{font-weight:700}
+.fu-total td{font-weight:700;background:var(--surface-2)}
+.fu-set{display:grid;grid-template-columns:repeat(3,1fr);gap:4px 16px}
+@media (max-width:860px){ .fu-stats{grid-template-columns:repeat(2,1fr)} .fu-set{grid-template-columns:1fr} .fu-acts{padding-inline-start:0} }
+
 /* ── Responsive ────────────────────────────────────────────────────────── */
 @media (max-width:860px){
   body{flex-direction:column;height:auto;min-height:100vh;overflow:auto}
@@ -548,7 +572,8 @@ const DEFAULT_MATS = ['HDPE','LDPE','PP','PET','PVC','PS','مواد مختلطة
 
 let _uid = 100;
 const uid   = () => ++_uid;
-const today = () => new Date().toISOString().split('T')[0];
+// today: the LOCAL calendar date. (toISOString() is UTC: between midnight and 2-3 AM in Egypt it still says yesterday.)
+const today = () => { const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`; };
 const fmt   = n  => `${Number(n||0).toLocaleString('ar-EG')} ج.م`;
 // esc: escape user-supplied text before it is placed into innerHTML (prevents HTML/JS injection)
 const esc   = s  => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -604,6 +629,7 @@ let DB = {
   supplierPayments:[],
   partners:[],
   distributions:[],
+  reminders:[],        // مواعيد المتابعة: {date, text, partyKind:'customer'|'supplier'|'', partyId, done, doneAt} — optional, absent in older files
   drafts:[]            // صندوق المراجعة: مسودات حركات (من الميدان / لصق) تنتظر الاعتماد — أرشيف لا يُحذف
 };
 
@@ -783,6 +809,7 @@ function buildPayload() {
     partners:       DB.partners,
     distributions:  DB.distributions,
     drafts:         DB.drafts,
+    reminders:      DB.reminders,
   };
 }
 
@@ -834,7 +861,7 @@ async function exportData() {
 // Records already holding valid objects & numbers are unchanged, so existing saved files load identically.
 function _sanitizeData(d){
   const RECORD_ARRAYS = ['suppliers','customers','purchases','sales','expenses','traderAdvances',
-                         'workerLiquidity','partnerFunding','closings','collections','supplierPayments','partners','distributions','drafts'];
+                         'workerLiquidity','partnerFunding','closings','collections','supplierPayments','partners','distributions','drafts','reminders'];
   RECORD_ARRAYS.forEach(k=>{
     d[k] = Array.isArray(d[k]) ? d[k].filter(r => r && typeof r === 'object') : [];
   });
@@ -874,16 +901,29 @@ function _sanitizeData(d){
     r.review = (r.review && typeof r.review==='object') ? r.review : null;
   });
   d.capital = num(d.capital);
+  // Dates are placed in tables and compared as text everywhere: keep them plain text with nothing HTML can use,
+  // and never undefined (sorting a statement by date used to throw on a record without one).
+  const plainDate = v => typeof v==='string' ? v.replace(/[<>&"'`]/g,'').slice(0,40) : '';
+  ['purchases','sales','expenses','collections','supplierPayments','traderAdvances','workerLiquidity','partnerFunding','distributions','closings']
+    .forEach(k=> d[k].forEach(r=>{ r.date = plainDate(r.date); }));
+  d.closings.forEach(r=>{ r.note = typeof r.note==='string' ? r.note : ''; });
+  d.reminders.forEach(r=>{ r.date=plainDate(r.date); r.text=typeof r.text==='string'?r.text:''; r.done=!!r.done;
+    r.partyKind=['customer','supplier'].includes(r.partyKind)?r.partyKind:''; if(!r.partyKind) r.partyId=null; });
+  // a party's own credit days (optional): a whole number of days from 1 to 365, anything else means "use the default"
+  [...d.suppliers,...d.customers].forEach(r=>{ if('creditDays' in r){ const v=Math.round(num(r.creditDays)); r.creditDays=(v>=1 && v<=365)?v:null; } });
   return d;
 }
 
 function loadJsonText(text, source, opts={}) {
   const silent = !!opts.silent;
   try {
-    const d = _sanitizeData(JSON.parse(text));
-    if (!Array.isArray(d.suppliers) || !Array.isArray(d.purchases)) {
-      if(!silent) showToast('✗ الملف غير صالح'); return false;
+    const raw = JSON.parse(text);
+    // Checked on the RAW file: _sanitizeData() turns every missing list into [], so checking after it accepted any
+    // JSON object at all (a drafts file, a package.json ...) as an empty ledger and replaced the books with nothing.
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !Array.isArray(raw.suppliers) || !Array.isArray(raw.purchases)) {
+      if(!silent) showToast('✗ الملف ده مش ملف بيانات البرنامج — الدفاتر زي ما هي'); return false;
     }
+    const d = _sanitizeData(raw);
     DB.suppliers = d.suppliers || [];
     DB.customers = d.customers || [];
     DB.purchases = d.purchases || [];
@@ -900,8 +940,13 @@ function loadJsonText(text, source, opts={}) {
     DB.partners        = d.partners        || [];
     DB.distributions   = d.distributions   || [];
     DB.drafts          = d.drafts          || [];
-    const allIds = [...DB.suppliers,...DB.customers,...DB.purchases,...DB.sales,...DB.expenses,...DB.traderAdvances,...DB.workerLiquidity,...DB.partnerFunding,...DB.collections,...DB.supplierPayments,...DB.partners,...DB.distributions,...DB.drafts].map(x=>(x&&x.id)||0);
-    if (allIds.length) _uid = Math.max(_uid, ...allIds) + 1;
+    DB.reminders       = d.reminders       || [];
+    const allIds = [...DB.suppliers,...DB.customers,...DB.purchases,...DB.sales,...DB.expenses,...DB.traderAdvances,...DB.workerLiquidity,...DB.partnerFunding,...DB.collections,...DB.supplierPayments,...DB.partners,...DB.distributions,...DB.drafts,...DB.reminders].map(x=>(x&&x.id)||0);
+    if (allIds.length) _uid = Math.max(_uid, ...allIds.map(num)) + 1;
+    // A record with no id (or an id another record of the same list already has) cannot be edited or deleted on its own:
+    // "delete" would take every record sharing that id. Hand-edited files are the usual source. Valid files are unchanged.
+    ['suppliers','customers','purchases','sales','expenses','traderAdvances','workerLiquidity','partnerFunding','collections','supplierPayments','partners','distributions','drafts','closings','reminders']
+      .forEach(k=>{ const seen=new Set(); (DB[k]||[]).forEach(r=>{ if(r.id==null || r.id==='' || seen.has(r.id)) r.id=uid(); seen.add(r.id); }); });
     DB.view = 'dashboard';
     render();
     if(!silent){
@@ -979,7 +1024,7 @@ function closeConfirm() {
 }
 const DATA_KEYS = ['suppliers','customers','purchases','sales','expenses','materials','capital',
                    'traderAdvances','workerLiquidity','partnerFunding','closings','collections','supplierPayments',
-                   'partners','distributions','drafts'];
+                   'partners','distributions','drafts','reminders'];
 function clearAllData() {
   const snap = {};                                  // full snapshot so even "مسح الكل" is undoable
   DATA_KEYS.forEach(k => snap[k] = DB[k]);
@@ -987,7 +1032,7 @@ function clearAllData() {
   DB.materials=[...DEFAULT_MATS];
   DB.capital=0; DB.traderAdvances=[]; DB.workerLiquidity=[]; DB.partnerFunding=[]; DB.closings=[];
   DB.collections=[]; DB.supplierPayments=[];
-  DB.partners=[]; DB.distributions=[]; DB.drafts=[];
+  DB.partners=[]; DB.distributions=[]; DB.drafts=[]; DB.reminders=[];
   DB.view='dashboard';
   markDirty(); render();
   showUndoToast('✓ تم مسح جميع البيانات', () => {
@@ -1050,6 +1095,28 @@ function deleteWithUndo(key, id, label) {
     markDirty(); render();
     showToast('↩ تم التراجع — تمت استعادة السجل');
   });
+}
+
+// deleteParty: a supplier / customer / partner that still has records must not be deleted. The records would stay in
+// the books under the name "-", and the party's balance would vanish from the accounts table while the balance sheet
+// still counted it (the two screens then disagree). Delete or move the records first; a party with none goes as before.
+function partyUsage(key,id){
+  const n=a=>(a||[]).filter(Boolean).length;
+  if(key==='suppliers') return n(DB.purchases.filter(r=>r.supplierId==id)) + n(DB.supplierPayments.filter(r=>r.supplierId==id));
+  if(key==='customers') return n(DB.sales.filter(r=>r.customerId==id)) + n(DB.collections.filter(r=>r.customerId==id));
+  if(key==='partners')  return n(DB.workerLiquidity.filter(r=>r.partnerId==id)) + n((DB.partnerFunding||[]).filter(r=>r.partnerId==id))
+                             + n(DB.distributions.filter(d=>(d.breakdown||[]).some(b=>b.partnerId==id)));
+  return 0;
+}
+function deleteParty(key,id){
+  const label={suppliers:'المورد',customers:'العميل',partners:'الشريك'}[key];
+  const used=partyUsage(key,id);
+  if(used>0){
+    const rec=(DB[key]||[]).find(x=>x.id===id);
+    showToast(`⚠ ماينفعش نحذف ${label} "${rec?rec.name:''}" — عليه ${used} ${used===1?'حركة':'حركات'} في الدفاتر. احذف حركاته الأول أو سيبه.`);
+    return;
+  }
+  deleteWithUndo(key,id,label);
 }
 
 // ── Computed ──────────────────────────────────────────────────────────────────
@@ -1227,12 +1294,12 @@ const pLabel = p  => { const i=DB.purchases.indexOf(p); return `#${String(i+1).p
 
 // ── DOM Helpers ───────────────────────────────────────────────────────────────
 const NAV=[
-  {id:'dashboard',l:'لوحة التحكم'},{id:'purchases',l:'المشتريات'},{id:'sales',l:'المبيعات'},
+  {id:'dashboard',l:'لوحة التحكم'},{id:'followup',l:'المتابعة والتنبيهات'},{id:'purchases',l:'المشتريات'},{id:'sales',l:'المبيعات'},
   {id:'inventory',l:'المخزون'},{id:'contacts',l:'الموردون والعملاء'},{id:'expenses',l:'المصروفات'},
   {id:'accounts',l:'حسابات الأطراف'},{id:'drafts',l:'صندوق المراجعة'},{id:'pl',l:'الأرباح والخسائر'},{id:'balance',l:'الميزانية والسيولة'},
   {id:'distribution',l:'توزيع الأرباح'},{id:'ai',l:'المستشار الذكي'},
 ];
-const TITLES={dashboard:'لوحة التحكم',purchases:'المشتريات',sales:'المبيعات',inventory:'المخزون',contacts:'الموردون والعملاء',expenses:'المصروفات',accounts:'حسابات الأطراف',drafts:'صندوق المراجعة',pl:'الأرباح والخسائر',balance:'الميزانية والسيولة',distribution:'توزيع الأرباح',ai:'المستشار الذكي'};
+const TITLES={followup:'المتابعة والتنبيهات',dashboard:'لوحة التحكم',purchases:'المشتريات',sales:'المبيعات',inventory:'المخزون',contacts:'الموردون والعملاء',expenses:'المصروفات',accounts:'حسابات الأطراف',drafts:'صندوق المراجعة',pl:'الأرباح والخسائر',balance:'الميزانية والسيولة',distribution:'توزيع الأرباح',ai:'المستشار الذكي'};
 
 function el(tag,attrs={},inner=''){
   const e=document.createElement(tag);
@@ -1273,7 +1340,7 @@ let _tableUI = {};
 // the same format every record stores its date in.
 const PERIODS=[['all','كل الفترات'],['2w','آخر أسبوعين'],['1m','آخر شهر'],['3m','آخر ٣ شهور'],['month','الشهر الحالي'],['custom','فترة مخصصة']];
 function periodBounds(period,from,to){
-  const iso=x=>x.toISOString().split('T')[0];
+  const iso=x=>_fmtYMD(x);                       // local date, the same calendar the records are dated in
   const back=n=>{ const t=new Date(); t.setDate(t.getDate()-n); return iso(t); };
   if(period==='2w')     return [back(14),null];
   if(period==='1m')     return [back(30),null];
@@ -1502,6 +1569,7 @@ function renderDashboard(){
     sg.appendChild(sc);
   });
   div.appendChild(sg);
+  if(DB.purchases.length||DB.sales.length||(DB.reminders||[]).length) div.appendChild(fuDashboardCard());   // 🔔 what needs doing today
   const row=el('div',{style:'display:grid;grid-template-columns:1fr 1fr;gap:12px'});
   const mkR=(title,items,col,nameFn)=>{
     const c=el('div',{cls:'card'});
@@ -1986,7 +2054,7 @@ function renderContacts(){
   ];
   const list=isSup?DB.suppliers:DB.customers;
   wrap.appendChild(makeTable(cols,list,
-    id=>deleteWithUndo(isSup?'suppliers':'customers', id, isSup?'المورد':'العميل'),
+    id=>deleteParty(isSup?'suppliers':'customers', id),
     r=>openEditModal(isSup?'supplier':'customer',r),{
     stateKey:isSup?'suppliers':'customers', sort:true, pageSize:50,
     searchPlaceholder:'🔎 ابحث بالاسم أو التليفون أو المدينة…',
@@ -2737,6 +2805,551 @@ function _renderAIAnalyze(){
 }
 // ══ AI ADVISOR END ══
 
+// ══ FOLLOW-UP CENTRE START ══  المتابعة والتنبيهات: insights · recommendations · reminders
+// Ground rules, the same as the advisor above:
+//   • Every figure on this screen is computed HERE, by plain code, from the ledger (ages of debts, overdue amounts, idle
+//     stock, cost changes, free cash). Nothing is estimated by a model.
+//   • The AI model is optional. When asked, it may only (1) put the items in a better order for today and (2) add ONE
+//     sentence of advice per item. A sentence that quotes a number the code did not produce is thrown away and the
+//     rule-based recommendation is shown instead (fuNumbersOk). With no API key the screen is complete and identical.
+//   • Thresholds, snoozes and the last AI wording are a per-device convenience kept in localStorage (pm_followup), never
+//     in the ledger file. Follow-up dates the owner writes himself (DB.reminders) ARE business records and are saved.
+const FU_LS='pm_followup';
+const FU_DEFAULTS={custDays:30,suppDays:30,slowDays:45,advDays:30,bufferMonths:1,biz:'تجارة البلاستيك'};
+let FU={...FU_DEFAULTS,snooze:{},tab:'today',brief:null,busy:false,error:'',_loaded:false};
+function fuLoad(){
+  if(FU._loaded) return; FU._loaded=true;
+  try{
+    const j=JSON.parse(localStorage.getItem(FU_LS)||'{}');
+    if(j && typeof j==='object'){
+      ['custDays','suppDays','slowDays','advDays'].forEach(k=>{ const v=Math.round(num(j[k])); if(v>=1 && v<=365) FU[k]=v; });
+      if(j.bufferMonths!=null && num(j.bufferMonths)>=0 && num(j.bufferMonths)<=12) FU.bufferMonths=num(j.bufferMonths);
+      if(typeof j.biz==='string' && j.biz.trim()) FU.biz=j.biz.trim().slice(0,60);
+      if(j.snooze && typeof j.snooze==='object') Object.entries(j.snooze).forEach(([k,v])=>{ if(typeof v==='string' && v>today()) FU.snooze[k]=v; });
+      if(j.brief && typeof j.brief==='object' && j.brief.day===today()) FU.brief=j.brief;
+    }
+  }catch(e){}
+}
+function fuSave(){
+  try{ localStorage.setItem(FU_LS,JSON.stringify({custDays:FU.custDays,suppDays:FU.suppDays,slowDays:FU.slowDays,advDays:FU.advDays,
+    bufferMonths:FU.bufferMonths,biz:FU.biz,snooze:FU.snooze,brief:FU.brief})); }catch(e){}
+}
+
+// ── dates as day numbers (no time zones involved: 'YYYY-MM-DD' in, whole days out) ──
+const _dayNum = s => { const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(s||'')); return m ? Math.round(Date.UTC(+m[1],+m[2]-1,+m[3])/864e5) : null; };
+const daysSince = (d,ref) => { const a=_dayNum(d), b=_dayNum(ref||today()); return (a==null||b==null) ? 0 : Math.max(0,b-a); };
+const addDays = (d,n) => { const a=_dayNum(d); return a==null ? String(d||'') : new Date((a+n)*864e5).toISOString().slice(0,10); };
+const dmy = s => { const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(s||'')); return m ? `${+m[3]}/${+m[2]}/${m[1]}` : String(s||''); };
+const fuMoney = v => fmt(Math.round(num(v)));
+const fuPrice = v => `${(+num(v).toFixed(2)).toLocaleString('ar-EG')} ج.م`;
+
+// ── Ages of debts ─────────────────────────────────────────────────────────────
+// What a party still owes (or is owed), deal by deal, oldest first. The cash paid inside a deal settles that deal;
+// later payments on account (تحصيلات / دفعات) settle the oldest open deal first, the way a running account is read.
+// The total always equals the statement balance. terms = the party's own credit days when set, else the default.
+const creditDaysOf = (kind,party) => { const v=Math.round(num(party && party.creditDays)); return v>0 ? v : (kind==='customer' ? FU.custDays : FU.suppDays); };
+function partyAging(kind,party,ref){
+  ref=ref||today();
+  const isC=kind==='customer';
+  const mine=r=>(isC?r.customerId:r.supplierId)==party.id;
+  const dealsAll=(isC?DB.sales:DB.purchases).filter(mine);
+  const pays=(isC?DB.collections:DB.supplierPayments).filter(mine);
+  const deals=dealsAll.map(r=>({date:r.date||'',id:r.id,left:netAmt(r)-num(r.paid)}))
+    .sort((a,b)=>String(a.date).localeCompare(String(b.date)) || ((a.id||0)-(b.id||0)));
+  let pool=pays.reduce((s,r)=>s+num(r.amount),0);
+  deals.forEach(d=>{ if(d.left<0){ pool+=-d.left; d.left=0; } });          // paid beyond the deal's value: the extra settles older deals
+  const open=[];
+  deals.forEach(d=>{ const use=Math.min(pool,d.left); pool-=use; const left=+(d.left-use).toFixed(2);
+    if(left>0.005) open.push({date:d.date,left,days:daysSince(d.date,ref)}); });
+  const terms=creditDaysOf(kind,party), buckets=[0,0,0,0];
+  let overdue=0, dueSoon=0;
+  open.forEach(o=>{ buckets[o.days<=30?0:o.days<=60?1:o.days<=90?2:3]+=o.left;
+    if(o.days>terms) overdue+=o.left; else if(o.days>=terms-7) dueSoon+=o.left; });
+  const total=open.reduce((s,o)=>s+o.left,0);
+  const lastPay=[...pays.map(r=>r.date),...dealsAll.filter(r=>num(r.paid)>0).map(r=>r.date)].filter(Boolean).sort().pop()||'';
+  return {balance:+(total-pool).toFixed(2),open,buckets:buckets.map(v=>+v.toFixed(2)),overdue:+overdue.toFixed(2),dueSoon:+dueSoon.toFixed(2),
+          oldestDate:open[0]?open[0].date:'',oldestDays:open[0]?open[0].days:0,terms,lastPay};
+}
+
+// ── Material by material: cost trend, selling price, margin, idle days ─────────
+function materialStats(ref){
+  ref=ref||today();
+  const byDate=(a,b)=>String(a.date).localeCompare(String(b.date)) || ((a.id||0)-(b.id||0));
+  const since30=addDays(ref,-30);
+  return computed().invRows.map(r=>{
+    const P=DB.purchases.filter(p=>p.material===r.m && netIn(p)>0).sort(byDate);
+    const S=DB.sales.filter(s=>s.material===r.m && aQty(s)>0).sort(byDate);
+    const lastP=P[P.length-1]||null, lastS=S[S.length-1]||null;
+    const prev=P.slice(0,-1), prevQty=prev.reduce((a,p)=>a+netIn(p),0);
+    const prevCost=prevQty>0 ? prev.reduce((a,p)=>a+netAmt(p),0)/prevQty : null;       // weighted cost of everything bought before the last deal
+    const lastCost=lastP ? netAmt(lastP)/netIn(lastP) : null;
+    const lastSell=lastS ? netAmt(lastS)/aQty(lastS) : null;
+    const qAll=S.reduce((a,s)=>a+aQty(s),0), revAll=S.reduce((a,s)=>a+netAmt(s),0);
+    const S30=S.filter(s=>s.date>=since30 && s.date<=ref), q30=S30.reduce((a,s)=>a+aQty(s),0), rev30=S30.reduce((a,s)=>a+netAmt(s),0);
+    const sellAll=qAll>0?revAll/qAll:null, sell30=q30>0?rev30/q30:null;
+    const pct=(sell,cost)=>(sell!=null && sell>0 && cost>0) ? +((sell-cost)/sell*100).toFixed(1) : null;
+    const lastMove=lastS?lastS.date:(lastP?lastP.date:'');
+    return {m:r.m,unit:r.unit,stock:r.stock,value:r.value,avgCost:r.avgCost,lastCost,prevCost,
+      costChangePct:(lastCost!=null && prevCost>0) ? +((lastCost-prevCost)/prevCost*100).toFixed(1) : null,
+      lastBuyDate:lastP?lastP.date:'',lastSell,lastSellDate:lastS?lastS.date:'',sellAll,sell30,
+      marginPct:pct(sellAll,r.avgCost),margin30Pct:pct(sell30,r.avgCost),marginOnLastCostPct:pct(lastSell,lastCost),
+      idleDays:(r.stock>0.0005 && lastMove)?daysSince(lastMove,ref):0,neverSold:!S.length};
+  });
+}
+
+// ── Cash: what is in the till against what is due, and how much can leave it safely ──
+function cashOutlook(ref){
+  ref=ref||today();
+  const c=computed(), k=computedCash();
+  const from=addDays(ref,-90), inWin=d=>d && d>=from && d<=ref;
+  const dated=[...DB.expenses,...DB.purchases,...DB.sales].map(r=>r.date).filter(Boolean).sort();
+  const spanDays=dated.length ? Math.min(90,Math.max(30,daysSince(dated[0],ref))) : 30;   // a young ledger is averaged over its own life, not 3 months
+  const opexWin=DB.expenses.filter(e=>inWin(e.date)).reduce((s,e)=>s+num(e.amount),0)
+              + [...DB.purchases,...DB.sales].filter(r=>inWin(r.date)).reduce((s,r)=>s+txSum(r),0);
+  const monthlyOpex=opexWin/(spanDays/30);
+  let payOverdue=0, paySoon=0, recOverdue=0;
+  DB.suppliers.forEach(s=>{ const a=partyAging('supplier',s,ref); payOverdue+=a.overdue; paySoon+=a.dueSoon; });
+  DB.customers.forEach(cu=>{ recOverdue+=partyAging('customer',cu,ref).overdue; });
+  const availProfit=c.net-c.totalDistributed, buffer=monthlyOpex*FU.bufferMonths;
+  const freeCash=k.cashBalance-payOverdue-buffer;
+  const r0=v=>Math.round(v);
+  return {cash:r0(k.cashBalance),receivable:r0(k.receivable),payable:r0(k.payable),payOverdue:r0(payOverdue),paySoon:r0(paySoon),recOverdue:r0(recOverdue),
+          monthlyOpex:r0(monthlyOpex),runwayMonths:monthlyOpex>0 ? +(k.cashBalance/monthlyOpex).toFixed(1) : null,
+          availProfit:r0(availProfit),buffer:r0(buffer),freeCash:r0(freeCash),safeDist:r0(Math.max(0,Math.min(availProfit,freeCash))),
+          gap:r0(Math.max(0,payOverdue-k.cashBalance))};
+}
+
+// ── The list ──────────────────────────────────────────────────────────────────
+// One entry per thing worth doing: {id, sev, score, icon, title, detail, rec, name?, act:[{l,fn}]}.
+//   title / detail = the facts (numbers by code) · rec = the rule-based recommendation · act = one-click next steps
+function buildInsights(ref){
+  fuLoad(); ref=ref||today();
+  const out=[], go=v=>()=>{ DB.view=v; render(); };
+  // 1) customers past their credit days — the collection list
+  DB.customers.forEach(c=>{
+    const a=partyAging('customer',c,ref); if(!(a.overdue>0.5)) return;
+    const late=a.oldestDays-a.terms, twin=supplierOfCustomer(c.id), owe=twin?buildSupplierStatement(twin).balance:0;
+    out.push({id:'rec:'+c.id,kind:'تحصيل',sev:(a.oldestDays>90||late>60)?'high':'med',score:a.overdue*(1+late/30),icon:'💵',name:c.name,
+      title:`حصّل من ${c.name}: ${fuMoney(a.overdue)} فات ميعادها`,
+      detail:`أقدم فاتورة مفتوحة بتاريخ ${dmy(a.oldestDate)} (من ${a.oldestDays} يوم، والمهلة ${a.terms} يوم) · إجمالي اللي عليه ${fuMoney(a.balance)}`
+            +(a.lastPay?` · آخر دفعة منه ${dmy(a.lastPay)}`:' · ما دفعش حاجة لسه'),
+      rec:owe>0.5 ? `له عندنا ${fuMoney(owe)} كمورد: اعمل مقاصة الأول وحصّل الفرق بس.`
+        : (a.oldestDays>90 ? 'كلّمه النهارده وخد ميعاد سداد محدد، ووقّف البيع الآجل له لحد ما يسدد.' : 'ابعت له تذكير بالحساب واتفق معاه على ميعاد.'),
+      act:[{l:'كشف الحساب',fn:()=>showCustomerStatement(c)},
+           {l:'+ تحصيل',fn:()=>{ openModal('collection'); DB.form.customerId=c.id; renderModal(); }},
+           {l:'📲 رسالة تذكير',fn:()=>fuOpenMessage(c)},
+           ...((owe>0.5 && twin)?[{l:'⚖ مقاصة',fn:()=>openOffsetModal(twin,c)}]:[])]});
+  });
+  // 2) suppliers we are late with, and what falls due this week
+  DB.suppliers.forEach(s=>{
+    const a=partyAging('supplier',s,ref); if(!(a.overdue>0.5) && !(a.dueSoon>0.5)) return;
+    const twin=linkedCustomer(s), owed=twin?buildCustomerStatement(twin).balance:0;
+    const act=[{l:'كشف الحساب',fn:()=>showSupplierStatement(s)},{l:'+ دفعة',fn:()=>{ openModal('supplierPay'); DB.form.supplierId=s.id; renderModal(); }},
+               ...((owed>0.5 && twin)?[{l:'⚖ مقاصة',fn:()=>openOffsetModal(s,twin)}]:[])];
+    if(a.overdue>0.5){
+      const late=a.oldestDays-a.terms;
+      out.push({id:'pay:'+s.id,kind:'سداد',sev:late>30?'high':'med',score:a.overdue*(1+late/30),icon:'🏭',name:s.name,
+        title:`سدّد لـ ${s.name}: ${fuMoney(a.overdue)} فات ميعادها`,
+        detail:`أقدم صفقة مفتوحة بتاريخ ${dmy(a.oldestDate)} (من ${a.oldestDays} يوم، والمهلة ${a.terms} يوم) · إجمالي اللي له ${fuMoney(a.balance)}`
+              +(a.lastPay?` · آخر دفعة له ${dmy(a.lastPay)}`:''),
+        rec:owed>0.5 ? `عليه لنا ${fuMoney(owed)} كعميل: اعمل مقاصة وادفع الفرق بس.` : 'رتّب له دفعة أو اتفق معاه على جدول سداد، علشان التوريد ما يقفش.',act});
+    } else {
+      out.push({id:'paysoon:'+s.id,kind:'سداد قريب',sev:'low',score:a.dueSoon,icon:'🗓',name:s.name,
+        title:`${fuMoney(a.dueSoon)} لـ ${s.name} هتستحق خلال أسبوع`,
+        detail:`المهلة ${a.terms} يوم · إجمالي اللي له ${fuMoney(a.balance)}`,rec:'جهّز المبلغ من تحصيلات الأسبوع ده.',act});
+    }
+  });
+  // 3) the till against what is due, and 4) how much profit can really be paid out
+  const o=cashOutlook(ref);
+  if(o.cash<0)
+    out.push({id:'cashneg',kind:'سيولة',sev:'high',score:1e13,icon:'🏦',title:`الخزنة بالسالب: ${fuMoney(o.cash)}`,
+      detail:'يعني في حركة ناقصة أو رأس المال مش متسجل صح.',rec:'راجع رأس المال وآخر الدفعات قبل ما تعتمد على أي رقم تاني.',act:[{l:'الميزانية والسيولة',fn:go('balance')}]});
+  else if(o.payOverdue>o.cash+0.5)
+    out.push({id:'cashgap',kind:'سيولة',sev:'high',score:1e12,icon:'🏦',
+      title:`الخزنة ${fuMoney(o.cash)} أقل من مستحقات الموردين المتأخرة ${fuMoney(o.payOverdue)}`,
+      detail:`العجز ${fuMoney(o.gap)} · متأخرات العملاء اللي ممكن تتحصّل ${fuMoney(o.recOverdue)}`,
+      rec:o.recOverdue>=o.gap ? 'ابدأ بالتحصيل قبل أي شراء جديد: متأخرات العملاء تغطي العجز.' : 'التحصيل لوحده مش هيغطي: أجّل المشتريات ورتّب مع الموردين جدول سداد.',
+      act:[{l:'حسابات الأطراف',fn:go('accounts')},{l:'الميزانية والسيولة',fn:go('balance')}]});
+  else if(o.monthlyOpex>0 && o.cash<o.monthlyOpex)
+    out.push({id:'cashlow',kind:'سيولة',sev:'med',score:1e11,icon:'🏦',title:`الخزنة ${fuMoney(o.cash)} أقل من مصروف شهر (${fuMoney(o.monthlyOpex)})`,
+      detail:`متوسط المصروف الشهري محسوب من آخر ٣ شهور · متأخرات العملاء ${fuMoney(o.recOverdue)}`,rec:'حصّل قبل ما تصرف أو تشتري.',act:[{l:'حسابات الأطراف',fn:go('accounts')}]});
+  if(o.availProfit>0.5){
+    const tight=o.safeDist+0.5<o.availProfit;
+    out.push({id:'dist',kind:'توزيع',sev:tight?'med':'low',score:o.availProfit,icon:'💰',
+      title:tight ? `الربح المتاح للتوزيع ${fuMoney(o.availProfit)} لكن الآمن دلوقتي ${fuMoney(o.safeDist)}` : `تقدر توزّع لحد ${fuMoney(o.safeDist)} من غير ضغط على الخزنة`,
+      detail:`الخزنة ${fuMoney(o.cash)} − مستحقات موردين متأخرة ${fuMoney(o.payOverdue)} − احتياطي مصروفات ${fuMoney(o.buffer)} = كاش حر ${fuMoney(o.freeCash)}`,
+      rec:!tight ? 'الربح كله موجود كاش: التوزيع مش هيأثر على المستحقات.'
+        : (o.safeDist>0 ? 'وزّع في حدود الرقم الآمن وأجّل الباقي لحد ما التحصيلات تدخل.' : 'أجّل التوزيع: الربح لسه عند العملاء وفي المخزون، مش في الخزنة.'),
+      act:[{l:'توزيع الأرباح',fn:go('distribution')}]});
+  }
+  // 5) materials: shortage, selling under cost, cost moving, idle stock
+  materialStats(ref).forEach(t=>{
+    const inv=[{l:'المخزون',fn:go('inventory')}];
+    if(t.stock<-0.0005)
+      out.push({id:'short:'+t.m,kind:'مخزون',sev:'high',score:1e10,icon:'📦',title:`عجز في مخزون ${t.m}: مباع ${fq(-t.stock)} ${t.unit} أكتر من الموجود`,
+        detail:'البيع المسجّل أكبر من الشراء المسجّل.',rec:'راجع الأوزان أو سجّل صفقة الشراء الناقصة.',act:inv});
+    if(t.lastSell!=null && t.avgCost>0 && t.lastSell<t.avgCost*0.999)
+      out.push({id:'loss:'+t.m,kind:'هامش',sev:'high',score:(t.avgCost-t.lastSell)*Math.max(1,t.stock),icon:'📉',
+        title:`آخر بيعة ${t.m} بسعر ${fuPrice(t.lastSell)} أقل من متوسط التكلفة ${fuPrice(t.avgCost)}`,
+        detail:`بتاريخ ${dmy(t.lastSellDate)} · خسارة ${fuPrice(t.avgCost-t.lastSell)} في كل ${t.unit}`+(t.stock>0?` · المتبقي ${fq(t.stock)} ${t.unit}`:''),
+        rec:'ارفع سعر البيع أو وقّف البيع بالسعر ده.',act:[{l:'المبيعات',fn:go('sales')},...inv]});
+    if(t.costChangePct!=null && t.costChangePct>=5 && t.stock>0.0005)
+      out.push({id:'costup:'+t.m,kind:'سعر',sev:'med',score:t.costChangePct*1000,icon:'📈',
+        title:`سعر شراء ${t.m} طلع ${t.costChangePct.toLocaleString('ar-EG')}٪`,
+        detail:`آخر شراء ${fuPrice(t.lastCost)} (${dmy(t.lastBuyDate)}) مقابل ${fuPrice(t.prevCost)} قبل كده`+(t.lastSell!=null?` · آخر سعر بيع ${fuPrice(t.lastSell)}`:''),
+        rec:(t.lastSell!=null && t.lastSell<=t.lastCost*1.03) ? 'سعر البيع الحالي بقى على قد التكلفة الجديدة: عدّل التسعير قبل البيعة الجاية.' : 'راجع سعر البيع علشان الهامش ما ينزلش.',
+        act:[{l:'المشتريات',fn:go('purchases')},...inv]});
+    if(t.costChangePct!=null && t.costChangePct<=-5 && t.stock>0.0005)
+      out.push({id:'costdown:'+t.m,kind:'سعر',sev:'low',score:-t.costChangePct*100,icon:'📉',
+        title:`سعر شراء ${t.m} نزل ${Math.abs(t.costChangePct).toLocaleString('ar-EG')}٪`,
+        detail:`آخر شراء ${fuPrice(t.lastCost)} (${dmy(t.lastBuyDate)}) مقابل ${fuPrice(t.prevCost)} قبل كده · المخزون القديم ${fq(t.stock)} ${t.unit}`,
+        rec:'السوق نازل: بيع المخزون القديم الأول وخفّف كميات الشراء.',act:inv});
+    if(t.stock>0.0005 && t.idleDays>=FU.slowDays)
+      out.push({id:'slow:'+t.m,kind:'مخزون راكد',sev:'med',score:t.value,icon:'🧊',
+        title:t.neverSold ? `${t.m} راكد: ما اتباعش منه حاجة من ${t.idleDays} يوم` : `${t.m} راكد: آخر بيع من ${t.idleDays} يوم`,
+        detail:`المتبقي ${fq(t.stock)} ${t.unit} بقيمة ${fuMoney(t.value)} بالتكلفة`,
+        rec:'اعرضه على العملاء بسعر قريب من التكلفة علشان تفك الفلوس المحبوسة فيه.',act:inv});
+  });
+  // 6) housekeeping
+  const pend=(DB.drafts||[]).filter(d=>d.status==='pending');
+  if(pend.length){
+    const age=Math.max(...pend.map(d=>daysSince(String(d.createdAt||d.receivedAt||'').slice(0,10),ref)));
+    out.push({id:'drafts',kind:'مراجعة',sev:age>=2?'med':'low',score:pend.length*1000+age,icon:'📥',
+      title:`${pend.length} ${pend.length===1?'مسودة':'مسودات'} من الميدان مستنية مراجعتك`,detail:age>0?`أقدمها من ${age} يوم`:'وصلت النهارده',
+      rec:'راجعها واعتمدها علشان الأرصدة تبقى مظبوطة.',act:[{l:'صندوق المراجعة',fn:go('drafts')}]});
+  }
+  DB.traderAdvances.filter(a=>!a.settled).forEach(a=>{ const d=daysSince(a.date,ref); if(d<=FU.advDays) return;
+    out.push({id:'adv:'+a.id,kind:'عهدة',sev:'med',score:num(a.amount),icon:'🤝',name:a.name,title:`${fuMoney(a.amount)} مع التاجر ${a.name} من ${d} يوم`,
+      detail:a.desc||'مبلغ مع تاجر لسه ما اتسوّاش',rec:'اسأل عن البضاعة أو استرد المبلغ وسجّل التسوية.',act:[{l:'الميزانية والسيولة',fn:go('balance')}]}); });
+  DB.workerLiquidity.filter(w=>!w.returned && !w.partnerId).forEach(w=>{ const d=daysSince(w.date,ref); if(d<=FU.advDays) return;
+    out.push({id:'wl:'+w.id,kind:'عهدة',sev:'low',score:num(w.amount),icon:'🧾',name:w.name,title:`عهدة ${fuMoney(w.amount)} مع ${w.name} من ${d} يوم`,
+      detail:w.desc||'سيولة مع عامل لسه ما رجعتش',rec:'صفّي العهدة: فواتير أو رجوع الباقي.',act:[{l:'الميزانية والسيولة',fn:go('balance')}]}); });
+  DB.partners.forEach(p=>{ const b=partnerLoanBalance(p.id); if(!(b>0.5)) return;
+    const first=(DB.partnerFunding||[]).filter(f=>f.partnerId==p.id && f.kind!=='out').map(f=>f.date).filter(Boolean).sort()[0];
+    out.push({id:'loan:'+p.id,kind:'تمويل شريك',sev:'low',score:b,icon:'🔁',name:p.name,title:`تمويل مؤقت من ${p.name}: باقي له ${fuMoney(b)}`,
+      detail:first?`أول تمويل بتاريخ ${dmy(first)} (من ${daysSince(first,ref)} يوم)`:'قرض سيولة مش زيادة رأس مال',
+      rec:'رتّب رد التمويل من أول تحصيل كبير.',act:[{l:'الميزانية والسيولة',fn:go('balance')}]}); });
+  const pct=DB.partners.reduce((a,p)=>a+num(p.sharePct),0);
+  if(DB.partners.length && Math.abs(pct-100)>0.01)
+    out.push({id:'shares',kind:'شركاء',sev:'med',score:1e6,icon:'👥',title:`مجموع نسب الشركاء ${pct.toLocaleString('ar-EG')}٪ مش ١٠٠٪`,detail:'التوزيع بيتحسب على مجموع النسب المسجّلة.',
+      rec:'صحّح النسب قبل أي توزيع.',act:[{l:'توزيع الأرباح',fn:go('distribution')}]});
+  // 7) the owner's own follow-up dates
+  (DB.reminders||[]).filter(r=>!r.done).forEach(r=>{
+    const a=_dayNum(r.date), b=_dayNum(ref); if(a==null || b==null) return;
+    const left=a-b; if(left>3) return;
+    const who=fuReminderParty(r);
+    out.push({id:'rem:'+r.id,kind:'ميعاد',sev:left<=0?'high':'low',score:1e9-left,icon:'⏰',name:who,
+      title:(left<0?'ميعاد فات: ':left===0?'ميعاد النهارده: ':'ميعاد قريب: ')+r.text,
+      detail:(left<0?`كان ميعاده ${dmy(r.date)} (من ${-left} يوم)`:left===0?`ميعاده النهارده ${dmy(r.date)}`:`ميعاده ${dmy(r.date)} (بعد ${left} يوم)`)+(who?` · ${who}`:''),
+      rec:'خلّصه وعلّم عليه «تم»، أو غيّر ميعاده.',
+      act:[{l:'✓ تم',fn:()=>fuReminderDone(r.id,true)},{l:'✎ عدّل',fn:()=>openEditModal('reminder',r)}]});
+  });
+  const rank={high:0,med:1,low:2};
+  out.sort((x,y)=>rank[x.sev]-rank[y.sev] || y.score-x.score);
+  const live=out.filter(x=>!(FU.snooze[x.id] && FU.snooze[x.id]>ref));
+  return {items:live,snoozed:out.length-live.length,outlook:o,urgent:live.filter(x=>x.sev!=='low').length};
+}
+// One computation per render(): the menu badge, the dashboard card and the screen all read the same list.
+let _fuCache=null;
+const fuNow = () => _fuCache || (_fuCache=buildInsights());
+function fuSnooze(id,days){ FU.snooze[id]=addDays(today(),days); fuSave(); render(); showToast(`✓ اتأجّل ${days===7?'أسبوع':days+' أيام'} — هيرجع يظهر بعدها لو لسه قائم`); }
+function fuUnsnoozeAll(){ FU.snooze={}; fuSave(); render(); }
+
+// ── The owner's own follow-up dates (saved in the ledger file) ─────────────────
+function fuReminderParty(r){
+  if(r.partyKind==='customer') return DB.customers.find(c=>c.id==r.partyId)?.name||'';
+  if(r.partyKind==='supplier') return DB.suppliers.find(s=>s.id==r.partyId)?.name||'';
+  return '';
+}
+function fuReminderDone(id,done){
+  DB.reminders=(DB.reminders||[]).map(r=>r.id===id?{...r,done:!!done,doneAt:done?today():null}:r);
+  markDirty(); render(); showToast(done?'✓ اتعلّم عليه «تم»':'↩ رجع للمواعيد المفتوحة');
+}
+function fuNewReminder(kind,party,text,inDays){
+  openModal('reminder');
+  Object.assign(DB.form,{date:addDays(today(),inDays==null?3:inDays),text:text||'',party:party?`${kind==='supplier'?'s':'c'}:${party.id}`:''});
+  renderModal();
+}
+
+// ── A collection reminder for WhatsApp: written by a template from the account, never sent by the app itself ──
+function fuPhone(p){
+  const d=String(p||'').replace(/[٠-٩]/g,x=>'٠١٢٣٤٥٦٧٨٩'.indexOf(x)).replace(/\D/g,'');
+  if(/^01\d{9}$/.test(d)) return '2'+d;            // 01xxxxxxxxx → 201xxxxxxxxx
+  if(/^201\d{9}$/.test(d)) return d;
+  if(/^00201\d{9}$/.test(d)) return d.slice(2);
+  return '';
+}
+function fuMessageText(c){
+  const a=partyAging('customer',c);
+  const n=v=>Math.round(num(v)).toLocaleString('ar-EG');
+  return [`السلام عليكم أ/ ${c.name}،`,`معاك ${FU.biz}.`,
+    a.overdue>0.5 ? `بنفكّر حضرتك إن الحساب المفتوح عليكم ${n(a.balance)} جنيه، منه ${n(a.overdue)} جنيه فات ميعاد سداده (أقدم فاتورة بتاريخ ${dmy(a.oldestDate)}).`
+                  : `بنفكّر حضرتك إن الحساب المفتوح عليكم ${n(a.balance)} جنيه.`,
+    'ياريت تحدد لنا ميعاد السداد، ولو في أي ملاحظة على الحساب بلّغنا.','شكراً لتعاونكم.'].join('\n');
+}
+function fuOpenMessage(c){
+  const ex=document.getElementById('stmt-overlay'); if(ex) ex.remove();
+  const ov=el('div',{style:'position:fixed;inset:0;background:var(--scrim);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px'});
+  ov.id='stmt-overlay'; ov.setAttribute('role','dialog'); ov.setAttribute('aria-modal','true'); ov.setAttribute('aria-label',`رسالة تذكير — ${c.name}`);
+  ov.onclick=e=>{ if(e.target===ov) ov.remove(); };
+  const box=el('div',{style:'background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);width:100%;max-width:560px;max-height:88vh;overflow-y:auto;padding:24px;box-shadow:var(--shadow-lg)'});
+  box.appendChild(el('div',{style:'font-size:15px;font-weight:700;margin-bottom:6px'},`📲 رسالة تذكير — ${esc(c.name)}`));
+  box.appendChild(el('div',{cls:'ai-sub',style:'margin-bottom:10px'},'الرسالة مكتوبة من أرقام كشف الحساب. عدّل فيها براحتك، وبعدين انسخها أو افتحها في واتساب. البرنامج نفسه ما بيبعتش حاجة.'));
+  const ta=document.createElement('textarea'); ta.className='ai-ta'; ta.id='fu-msg'; ta.style.minHeight='170px'; ta.value=fuMessageText(c);
+  box.appendChild(ta);
+  const row=el('div',{style:'display:flex;gap:8px;flex-wrap:wrap;margin-top:14px'});
+  const cp=el('button',{cls:'btn-primary',type:'button'},'⧉ نسخ الرسالة');
+  cp.onclick=()=>{ const done=()=>showToast('✓ الرسالة اتنسخت'); const t=ta.value;
+    if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done).catch(()=>{ ta.select(); try{ document.execCommand('copy'); done(); }catch(e){ showToast('✗ ما اتنسختش'); } });
+    else { ta.select(); try{ document.execCommand('copy'); done(); }catch(e){ showToast('✗ ما اتنسختش'); } } };
+  row.appendChild(cp);
+  const ph=fuPhone(c.phone);
+  if(ph){
+    const wa=el('a',{cls:'btn-success',id:'fu-wa',target:'_blank',rel:'noopener noreferrer',style:'text-decoration:none;display:inline-flex;align-items:center'},'فتح في واتساب ↗');
+    const setHref=()=>{ wa.href=`https://wa.me/${ph}?text=${encodeURIComponent(ta.value)}`; };
+    setHref(); ta.oninput=setHref;
+    row.appendChild(wa);
+  } else row.appendChild(el('span',{style:'font-size:11.5px;color:var(--faint);align-self:center'},'مفيش رقم موبايل مصري متسجل للعميل ده — انسخ الرسالة وابعتها بنفسك.'));
+  const rm=el('button',{cls:'btn-ghost',type:'button'},'⏰ سجّل ميعاد متابعة');
+  rm.onclick=()=>{ ov.remove(); fuNewReminder('customer',c,`متابعة تحصيل ${c.name}`,3); };
+  row.appendChild(rm);
+  const x=el('button',{cls:'btn-ghost',type:'button'},'إغلاق'); x.onclick=()=>ov.remove(); row.appendChild(x);
+  box.appendChild(row); ov.appendChild(box); document.body.appendChild(ov);
+}
+
+// ── AI wording: order + one sentence per item, numbers guarded ─────────────────
+const _fuLatin = s => String(s==null?'':s).replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+function fuNumbersIn(s){
+  const t=_fuLatin(s).replace(/(\d)[,٬](?=\d{3}(?!\d))/g,'$1').replace(/(\d)٫(?=\d)/g,'$1.');
+  return (t.match(/\d+(?:\.\d+)?/g)||[]).map(Number);
+}
+// fuNumbersOk: true when every number written in `text` also appears in `source` (what the code itself wrote).
+function fuNumbersOk(text,source){ const ok=new Set(fuNumbersIn(source)); return fuNumbersIn(text).every(n=>ok.has(n)); }
+function fuRuleHeadline(R){
+  const top=R.items.filter(x=>x.sev==='high').slice(0,3);
+  if(!R.items.length) return 'مفيش حاجة مستعجلة النهارده: الحسابات والمخزون في الحدود اللي حددتها.';
+  if(!top.length) return `مفيش حاجة حرجة النهارده، وفي ${R.items.length} ${R.items.length===1?'بند':'بنود'} للمتابعة على مهلك.`;
+  return `أهم حاجة النهارده: ${top[0].title}.`+(top.length>1?` وبعدها ${top.length===2?'بند كمان':'بندين كمان'} مستعجلين.`:'');
+}
+const _fuItemText = x => `${x.title} — ${x.detail}`;
+async function fuAiBrief(){
+  if(FU.busy) return;
+  const key=(AI.keys[AI.provider]||'').trim();
+  if(!key){ FU.error='ضيف مفتاح API من شاشة «المستشار الذكي» ← الإعدادات، وبعدها ارجع هنا.'; render(); return; }
+  const R=fuNow(), items=R.items.slice(0,14);
+  if(!items.length){ showToast('مفيش بنود تتصاغ'); return; }
+  // names can be hidden exactly like the advisor does (same switch): the model sees aliases, the screen shows the names
+  const alias=new Map(); if(AI.anonymize) items.forEach(x=>{ if(x.name && !alias.has(x.name)) alias.set(x.name,`طرف-${alias.size+1}`); });
+  const hide=s=>{ let t=String(s); alias.forEach((a,n)=>{ t=t.split(n).join(a); }); return t; };
+  const show=s=>{ let t=String(s); alias.forEach((a,n)=>{ t=t.split(a).join(n); }); return t; };
+  const sys=['أنت مساعد صاحب تجارة خامات بلاستيك في مصر. هتوصلك قائمة بنود متابعة محسوبة من دفاتره، كل بند له id ووصف بأرقامه.',
+    'المطلوب: رتّب البنود حسب أولوية التنفيذ النهارده، واكتب لكل بند نصيحة عملية واحدة قصيرة بالعامية المصرية (أقل من ٢٥ كلمة)، وجملة افتتاحية واحدة تقول أهم حاجة.',
+    'ممنوع تحسب أو تخمّن أي رقم. لو لازم تذكر رقم انقله بالحرف من وصف البند نفسه، والأفضل نصيحة من غير أرقام خالص.',
+    'رجّع JSON فقط من غير أي كلام تاني بالشكل: {"headline":"...","order":["id","id"],"tips":{"id":"..."}}'].join('\n');
+  const usr=JSON.stringify({التاريخ:today(),البنود:items.map(x=>({id:x.id,النوع:x.kind,الأهمية:x.sev,الوصف:hide(_fuItemText(x)),التوصية_الحالية:hide(x.rec)}))});
+  FU.busy=true; FU.error=''; render();
+  const ctl=new AbortController(), timer=setTimeout(()=>{ try{ ctl.abort(); }catch(e){} },60000);
+  try{
+    const res=await AI_PROVIDERS[AI.provider].call(key,AI.model,sys,usr,ctl.signal);
+    const m=String(res.text||'').replace(/```(?:json)?/g,'').match(/\{[\s\S]*\}/);
+    let j=null; try{ j=JSON.parse(m && m[0]); }catch(e){}
+    if(!j || typeof j!=='object') throw new Error('رد النموذج مش بالشكل المطلوب — القائمة فضلت بترتيبها وتوصياتها المحسوبة.');
+    const ids=new Set(items.map(x=>x.id)), seen=new Set();
+    const order=(Array.isArray(j.order)?j.order:[]).map(String).filter(id=>ids.has(id) && !seen.has(id) && seen.add(id));
+    const all=items.map(_fuItemText).join(' ');
+    const tips={}; let dropped=0;
+    if(j.tips && typeof j.tips==='object') Object.entries(j.tips).forEach(([id,t])=>{
+      const it=items.find(x=>x.id===id); if(!it || typeof t!=='string' || !t.trim()) return;
+      const tip=show(t.trim().replace(/\s+/g,' ')).slice(0,260);
+      if(fuNumbersOk(tip,_fuItemText(it)+' '+it.rec)) tips[id]=tip; else dropped++;
+    });
+    let headline=typeof j.headline==='string' ? show(j.headline.trim().replace(/\s+/g,' ')).slice(0,300) : '';
+    if(headline && !fuNumbersOk(headline,all)){ headline=''; dropped++; }
+    FU.brief={day:today(),at:new Date().toISOString(),provider:AI.provider,model:AI.model,headline,order,tips,dropped};
+    fuSave();
+    showToast(dropped?`✓ اتصاغت — واترفضت ${dropped} ${dropped===1?'جملة':'جمل'} فيها رقم مش من الدفاتر`:'✓ اتصاغت واترتّبت');
+  }catch(err){
+    FU.error=(err && err.name==='AbortError') ? 'النموذج ما ردّش في دقيقة — القائمة فضلت بترتيبها المحسوب.' : _aiErrMsg(err);
+  }finally{ clearTimeout(timer); FU.busy=false; render(); }
+}
+function fuClearBrief(){ FU.brief=null; fuSave(); render(); }
+// The list as shown: the AI's order first (when there is one for today), then everything it did not mention, as computed.
+function fuOrdered(R){
+  const b=FU.brief; if(!b || !Array.isArray(b.order) || !b.order.length) return R.items;
+  const pos=new Map(b.order.map((id,i)=>[id,i]));
+  return R.items.slice().sort((x,y)=>(pos.has(x.id)?pos.get(x.id):1e6+R.items.indexOf(x))-(pos.has(y.id)?pos.get(y.id):1e6+R.items.indexOf(y)));
+}
+
+// ── View ──────────────────────────────────────────────────────────────────────
+const FU_SEV={high:['badge-danger','عاجل'],med:['badge-warning','مهم'],low:['badge-info','للعلم']};
+function fuItemNode(x,compact){
+  const b=FU.brief, tip=b && b.tips && b.tips[x.id];
+  const card=el('div',{cls:`fu-item fu-${x.sev}`});
+  card.dataset.id=x.id;
+  const head=el('div',{cls:'fu-head'});
+  head.appendChild(el('span',{cls:'fu-ic','aria-hidden':'true'},x.icon));
+  const txt=el('div',{cls:'fu-txt'});
+  txt.appendChild(el('div',{cls:'fu-title'},`<span class="badge ${FU_SEV[x.sev][0]}">${FU_SEV[x.sev][1]}</span> ${esc(x.title)}`));
+  txt.appendChild(el('div',{cls:'fu-detail'},esc(x.detail)));
+  if(!compact) txt.appendChild(el('div',{cls:'fu-rec'},tip ? `✨ ${esc(tip)}` : `💡 ${esc(x.rec)}`));
+  head.appendChild(txt); card.appendChild(head);
+  if(!compact){
+    const acts=el('div',{cls:'fu-acts'});
+    x.act.forEach(a=>{ const btn=el('button',{cls:'btn-xs',type:'button'},esc(a.l)); btn.onclick=a.fn; acts.appendChild(btn); });
+    const s3=el('button',{cls:'btn-xs fu-snz',type:'button',title:'اخفيه ٣ أيام'},'أجّل ٣ أيام'); s3.onclick=()=>fuSnooze(x.id,3);
+    const s7=el('button',{cls:'btn-xs fu-snz',type:'button',title:'اخفيه أسبوع'},'أجّل أسبوع'); s7.onclick=()=>fuSnooze(x.id,7);
+    acts.appendChild(s3); acts.appendChild(s7);
+    card.appendChild(acts);
+  }
+  return card;
+}
+// The card on the dashboard: the top of the list, one click from the full screen.
+function fuDashboardCard(){
+  const R=fuNow();
+  const c=el('div',{cls:'card fu-dash',style:'margin-bottom:14px'});
+  const h=el('div',{style:'display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap'});
+  h.appendChild(el('div',{style:'font-size:13px;font-weight:700'},`🔔 متابعة اليوم${R.urgent?` <span class="badge badge-danger">${R.urgent}</span>`:''}`));
+  const all=el('button',{cls:'btn-xs',type:'button'},`عرض الكل (${R.items.length}) ←`); all.onclick=()=>{ DB.view='followup'; FU.tab='today'; render(); };
+  h.appendChild(all); c.appendChild(h);
+  if(!R.items.length) c.appendChild(el('div',{style:'font-size:13px;color:var(--pos);padding:6px 0'},'✓ '+fuRuleHeadline(R)));
+  else fuOrdered(R).slice(0,3).forEach(x=>c.appendChild(fuItemNode(x,true)));
+  return c;
+}
+function renderFollowup(){
+  fuLoad();
+  const R=fuNow(), wrap=el('div',{cls:'ai-wrap'});
+  const tabs=el('div',{cls:'tab-row',style:'flex-wrap:wrap;margin-bottom:4px'});
+  [['today',`تنبيهات اليوم${R.items.length?` (${R.items.length})`:''}`],['aging','أعمار الديون'],['margins','الهوامش والأسعار'],['reminders',`مواعيدي${(DB.reminders||[]).filter(r=>!r.done).length?` (${(DB.reminders||[]).filter(r=>!r.done).length})`:''}`],['settings','الإعدادات']]
+    .forEach(([id,l])=>{ const b=el('button',{cls:`tab-btn ${FU.tab===id?'tab-active':'tab-inactive'}`,type:'button'},l); b.dataset.tab=id; b.onclick=()=>{ FU.tab=id; render(); }; tabs.appendChild(b); });
+  wrap.appendChild(tabs);
+  wrap.appendChild(({today:_fuTabToday,aging:_fuTabAging,margins:_fuTabMargins,reminders:_fuTabReminders,settings:_fuTabSettings}[FU.tab]||_fuTabToday)(R));
+  return wrap;
+}
+function _fuTabToday(R){
+  const box=el('div',{cls:'ai-wrap'}), o=R.outlook, b=FU.brief, hasKey=!!(AI.keys[AI.provider]||'').trim();
+  // headline + the AI button
+  const hc=el('div',{cls:'card'});
+  hc.appendChild(el('div',{cls:'fu-headline',id:'fu-headline'},esc((b && b.headline) || fuRuleHeadline(R))));
+  const row=el('div',{style:'display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:12px'});
+  const ai=el('button',{cls:'btn-primary',type:'button',id:'fu-ai-btn',style:'font-size:12px;padding:7px 14px'},FU.busy?'⏳ بيرتّب ويصيغ…':(b?'✨ صياغة جديدة':'✨ رتّبها وصيغها بالذكاء الاصطناعي'));
+  if(FU.busy || !R.items.length) ai.disabled=true;
+  ai.onclick=fuAiBrief; row.appendChild(ai);
+  if(b){ const rs=el('button',{cls:'btn-ghost',type:'button',style:'font-size:12px;padding:7px 14px'},'↺ الترتيب المحسوب'); rs.onclick=fuClearBrief; row.appendChild(rs);
+    row.appendChild(el('span',{style:'font-size:11px;color:var(--faint)'},`صياغة ${esc((AI_PROVIDERS[b.provider]||{}).label||b.provider||'')} · ${esc(new Date(b.at).toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'}))}${b.dropped?` · اترفضت ${b.dropped} لذكر رقم مش من الدفاتر`:''}`)); }
+  else if(!hasKey) row.appendChild(el('span',{style:'font-size:11px;color:var(--faint)'},'من غير مفتاح API القائمة كاملة بتوصيات محسوبة. المفتاح بيضيف الترتيب والصياغة بس.'));
+  hc.appendChild(row);
+  if(FU.error) hc.appendChild(el('div',{cls:'ai-status err'},'✗ '+esc(FU.error)));
+  hc.appendChild(el('div',{cls:'ai-note'},'كل رقم هنا محسوب من الدفاتر بالكود. النموذج (لو شغّلته) بيرتّب ويكتب جملة نصيحة لكل بند، وأي جملة فيها رقم مش موجود في البند بتترفض. بيتبعت له وصف البنود دي بس'+(AI.anonymize?'، والأسماء مخفية.':'، بأسماء الأطراف (تقدر تخفيها من «المستشار الذكي» ← إخفاء الأسماء).')));
+  box.appendChild(hc);
+  // the till at a glance
+  const sg=el('div',{cls:'stat-grid fu-stats'});
+  [['الخزنة',fuMoney(o.cash),o.cash<0?'c-red':''],['متأخرات العملاء',fuMoney(o.recOverdue),o.recOverdue>0?'c-amber':''],
+   ['مستحقات موردين متأخرة',fuMoney(o.payOverdue),o.payOverdue>0?'c-red':''],['متوسط مصروف الشهر',fuMoney(o.monthlyOpex),''],
+   ['أقصى توزيع آمن',fuMoney(o.safeDist),'c-green']]
+    .forEach(([l,v,cls])=>{ const sc=el('div',{cls:'stat-card'}); sc.appendChild(el('div',{cls:'stat-label'},l)); sc.appendChild(el('div',{cls:`stat-value ${cls}`,style:'font-size:17px'},v)); sg.appendChild(sc); });
+  box.appendChild(sg);
+  // the list
+  const lc=el('div',{cls:'card'});
+  if(!R.items.length) lc.appendChild(el('div',{style:'font-size:13px;color:var(--faint);padding:14px 0;text-align:center'},DB.purchases.length||DB.sales.length?'✓ مفيش تنبيهات دلوقتي.':'سجّل مشترياتك ومبيعاتك والتنبيهات هتظهر هنا لوحدها.'));
+  fuOrdered(R).forEach(x=>lc.appendChild(fuItemNode(x,false)));
+  if(R.snoozed){ const sn=el('div',{style:'margin-top:12px;font-size:12px;color:var(--muted);display:flex;gap:10px;align-items:center;flex-wrap:wrap'});
+    sn.appendChild(el('span',{},`${R.snoozed} ${R.snoozed===1?'بند مؤجّل':'بنود مؤجّلة'}`));
+    const un=el('button',{cls:'btn-xs',type:'button'},'رجّعهم'); un.onclick=fuUnsnoozeAll; sn.appendChild(un); lc.appendChild(sn); }
+  box.appendChild(lc);
+  return box;
+}
+function _fuAgingTable(kind){
+  const isC=kind==='customer', list=isC?DB.customers:DB.suppliers;
+  const rows=list.map(p=>({p,a:partyAging(kind,p)})).filter(x=>Math.abs(x.a.balance)>0.5).sort((x,y)=>y.a.overdue-x.a.overdue || y.a.balance-x.a.balance);
+  const card=el('div',{cls:'card'});
+  card.appendChild(el('div',{style:'font-size:13px;font-weight:700;margin-bottom:6px'},isC?'🧾 أعمار ديون العملاء (اللي لينا)':'🏭 أعمار مستحقات الموردين (اللي علينا)'));
+  card.appendChild(el('div',{cls:'ai-sub',style:'margin-bottom:10px'},'المدفوع جوه الصفقة بيسدد الصفقة نفسها، والدفعات على الحساب بتسدد أقدم صفقة مفتوحة الأول. «متأخر» = عدّى مهلة السداد.'));
+  if(!rows.length){ card.appendChild(el('div',{style:'color:var(--faint);font-size:13px;padding:8px 0'},'مفيش أرصدة مفتوحة.')); return card; }
+  const tbl=document.createElement('table'); tbl.className='fu-aging';
+  tbl.innerHTML=`<thead><tr><th scope="col">${isC?'العميل':'المورد'}</th><th scope="col">الرصيد</th><th scope="col">لحد ٣٠ يوم</th><th scope="col">٣١–٦٠</th><th scope="col">٦١–٩٠</th><th scope="col">أكتر من ٩٠</th><th scope="col">متأخر</th><th scope="col">أقدم مفتوح</th><th scope="col">المهلة</th><th scope="col">آخر دفعة</th><th scope="col" aria-label="إجراءات"></th></tr></thead>`;
+  const tb=document.createElement('tbody'), T=[0,0,0,0,0,0];
+  const cell=(v,cls)=>`<td class="${v>0.5?cls:'fu-nil'}">${v>0.5?fuMoney(v):'—'}</td>`;
+  rows.forEach(({p,a})=>{
+    T[0]+=a.balance; a.buckets.forEach((v,i)=>T[i+1]+=v); T[5]+=a.overdue;
+    const tr=document.createElement('tr'); tr.dataset.id=p.id;
+    tr.innerHTML=`<td style="font-weight:600">${esc(p.name)}</td><td style="font-weight:700">${a.balance<0?`<span class="c-green">دافع زيادة ${fuMoney(-a.balance)}</span>`:fuMoney(a.balance)}</td>`
+      +cell(a.buckets[0],'')+cell(a.buckets[1],'c-amber')+cell(a.buckets[2],'c-amber')+cell(a.buckets[3],'c-red')+cell(a.overdue,'c-red fu-b')
+      +`<td>${a.oldestDate?`${esc(dmy(a.oldestDate))}<span class="fu-sub">من ${a.oldestDays} يوم</span>`:'—'}</td><td>${a.terms} يوم${num(p.creditDays)>0?'':'<span class="fu-sub">افتراضي</span>'}</td><td>${a.lastPay?esc(dmy(a.lastPay)):'—'}</td>`;
+    const act=document.createElement('td'); act.style.whiteSpace='nowrap';
+    const b1=el('button',{cls:'btn-xs',type:'button'},'كشف'); b1.onclick=()=>isC?showCustomerStatement(p):showSupplierStatement(p); act.appendChild(b1);
+    if(isC && a.balance>0.5){ const b2=el('button',{cls:'btn-xs',type:'button',style:'margin-inline-start:4px',title:'رسالة تذكير'},'📲'); b2.onclick=()=>fuOpenMessage(p); act.appendChild(b2); }
+    tr.appendChild(act); tb.appendChild(tr);
+  });
+  const tot=document.createElement('tr'); tot.className='fu-total';
+  tot.innerHTML=`<td>الإجمالي</td><td>${fuMoney(T[0])}</td><td>${fuMoney(T[1])}</td><td>${fuMoney(T[2])}</td><td>${fuMoney(T[3])}</td><td>${fuMoney(T[4])}</td><td class="c-red">${fuMoney(T[5])}</td><td colspan="4"></td>`;
+  tb.appendChild(tot); tbl.appendChild(tb);
+  card.appendChild(el('div',{cls:'tbl-wrap'},[tbl]));
+  return card;
+}
+function _fuTabAging(){ const box=el('div',{cls:'ai-wrap'}); box.appendChild(_fuAgingTable('customer')); box.appendChild(_fuAgingTable('supplier')); return box; }
+function _fuTabMargins(){
+  const box=el('div',{cls:'card'}), rows=materialStats();
+  box.appendChild(el('div',{style:'font-size:13px;font-weight:700;margin-bottom:6px'},'📈 الهوامش وحركة الأسعار لكل خامة'));
+  box.appendChild(el('div',{cls:'ai-sub',style:'margin-bottom:10px'},'الهامش = (سعر البيع − متوسط التكلفة) ÷ سعر البيع. «تغيّر الشراء» = آخر صفقة شراء مقابل المتوسط المرجّح لكل اللي قبلها. الأسعار للوحدة بعد الخصم.'));
+  if(!rows.length){ box.appendChild(el('div',{style:'color:var(--faint);font-size:13px;padding:8px 0'},'لسه مفيش حركة على أي خامة.')); return box; }
+  const P=v=>v==null?'—':fuPrice(v), pc=(v,inv)=>v==null?'—':`<span class="${(inv?-v:v)<0?'c-red':(inv?-v:v)>0?'c-green':''}" style="font-weight:700">${v>0?'+':''}${v.toLocaleString('ar-EG')}٪</span>`;
+  const tbl=document.createElement('table'); tbl.className='fu-aging';
+  tbl.innerHTML='<thead><tr><th scope="col">الخامة</th><th scope="col">المتبقي</th><th scope="col">متوسط التكلفة</th><th scope="col">آخر شراء</th><th scope="col">تغيّر الشراء</th><th scope="col">آخر بيع</th><th scope="col">هامش كل الفترة</th><th scope="col">هامش آخر ٣٠ يوم</th><th scope="col">هامش على آخر تكلفة</th><th scope="col">راكد من</th></tr></thead>';
+  const tb=document.createElement('tbody');
+  rows.forEach(t=>{ const tr=document.createElement('tr'); tr.dataset.m=t.m;
+    tr.innerHTML=`<td style="font-weight:700">${esc(t.m)}</td><td>${fq(t.stock)} ${esc(t.unit)}<span class="fu-sub">${fuMoney(t.value)}</span></td><td>${P(t.avgCost)}</td>`
+      +`<td>${P(t.lastCost)}${t.lastBuyDate?`<span class="fu-sub">${esc(dmy(t.lastBuyDate))}</span>`:''}</td><td>${pc(t.costChangePct,true)}</td>`
+      +`<td>${P(t.lastSell)}${t.lastSellDate?`<span class="fu-sub">${esc(dmy(t.lastSellDate))}</span>`:''}</td><td>${pc(t.marginPct)}</td><td>${pc(t.margin30Pct)}</td><td>${pc(t.marginOnLastCostPct)}</td>`
+      +`<td>${t.stock>0.0005 && t.idleDays>=FU.slowDays?`<span class="badge badge-warning">${t.idleDays} يوم</span>`:(t.stock>0.0005?`${t.idleDays} يوم`:'—')}</td>`;
+    tb.appendChild(tr); });
+  tbl.appendChild(tb); box.appendChild(el('div',{cls:'tbl-wrap'},[tbl]));
+  return box;
+}
+function _fuTabReminders(){
+  const card=el('div',{cls:'card'});
+  const h=el('div',{style:'display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap'});
+  h.appendChild(el('div',{style:'font-size:13px;font-weight:700'},'⏰ مواعيد المتابعة'));
+  const add=el('button',{cls:'btn-primary',type:'button',style:'font-size:12px;padding:6px 14px'},'+ ميعاد جديد'); add.onclick=()=>fuNewReminder(); h.appendChild(add);
+  card.appendChild(h);
+  card.appendChild(el('div',{cls:'ai-sub',style:'margin-bottom:10px'},'وعد سداد من عميل، ميعاد شيك، مكالمة مورد: اكتبه بتاريخه وهيظهر في «تنبيهات اليوم» قبلها بـ ٣ أيام ولحد ما تعلّم عليه «تم». المواعيد دي بتتحفظ جوه ملف البيانات.'));
+  const list=(DB.reminders||[]).slice().sort((a,b)=>(a.done-b.done) || String(a.date).localeCompare(String(b.date)));
+  if(!list.length){ card.appendChild(el('div',{style:'color:var(--faint);font-size:13px;padding:10px 0;text-align:center'},'لسه مفيش مواعيد.')); return card; }
+  const cols=[
+    {key:'date',label:'الميعاد',render:r=>{ const left=(_dayNum(r.date)||0)-(_dayNum(today())||0);
+      return `${esc(dmy(r.date))}${r.done?'':`<span class="fu-sub ${left<0?'c-red':''}">${left<0?`فات من ${-left} يوم`:left===0?'النهارده':`بعد ${left} يوم`}</span>`}`; }},
+    {key:'text',label:'المطلوب',render:r=>`<span style="${r.done?'text-decoration:line-through;color:var(--faint)':'font-weight:600'}">${esc(r.text)}</span>`},
+    {key:'party',label:'الطرف',render:r=>esc(fuReminderParty(r))||DASH},
+    {key:'done',label:'الحالة',render:r=>{ const b=el('button',{cls:'btn-xs',type:'button'},r.done?'↩ افتحه تاني':'✓ تم'); b.onclick=()=>fuReminderDone(r.id,!r.done); return b; }},
+  ];
+  card.appendChild(makeTable(cols,list,id=>deleteWithUndo('reminders',id,'الميعاد'),r=>openEditModal('reminder',r)));
+  return card;
+}
+function _fuTabSettings(){
+  const card=el('div',{cls:'card'});
+  card.appendChild(el('div',{style:'font-size:13px;font-weight:700;margin-bottom:6px'},'⚙ حدود التنبيهات'));
+  card.appendChild(el('div',{cls:'ai-sub'},'الأرقام دي بتحدد إمتى البند يعتبر «متأخر» أو «راكد». بتتحفظ على الجهاز ده بس. مهلة السداد الخاصة بعميل أو مورد معيّن بتتكتب في بياناته من «الموردون والعملاء» وبتغلب الافتراضي.'));
+  const grid=el('div',{cls:'fu-set'});
+  const numF=(k,l,hint,min,max,step)=>{ const f=el('div',{cls:'field'}); f.appendChild(el('label',{},l));
+    const i=document.createElement('input'); i.type='number'; i.min=min; i.max=max; i.step=step||1; i.value=FU[k]; i.dataset.fu=k;
+    i.onchange=()=>{ const v=num(i.value); if(v>=min && v<=max){ FU[k]=step?v:Math.round(v); FU.brief=null; fuSave(); render(); showToast('✓ اتحفظ'); } else { i.value=FU[k]; showToast(`⚠ القيمة لازم تكون بين ${min} و ${max}`); } };
+    f.appendChild(i); f.appendChild(el('div',{style:'font-size:10.5px;color:var(--faint);margin-top:5px;line-height:1.6'},hint)); return f; };
+  grid.appendChild(numF('custDays','مهلة سداد العملاء (يوم)','بعدها اللي على العميل يتحسب متأخر.',1,365));
+  grid.appendChild(numF('suppDays','مهلة السداد للموردين (يوم)','بعدها اللي علينا للمورد يتحسب فات ميعاده.',1,365));
+  grid.appendChild(numF('slowDays','المخزون راكد بعد (يوم)','من آخر بيع، أو من آخر شراء لو ما اتباعش منه.',1,365));
+  grid.appendChild(numF('advDays','متابعة العهد والمبالغ مع التجار بعد (يوم)','مبلغ مع تاجر أو عهدة مع عامل ما اتسوّتش.',1,365));
+  grid.appendChild(numF('bufferMonths','احتياطي المصروفات قبل التوزيع (شهور)','بيتخصم من الخزنة قبل حساب «أقصى توزيع آمن».',0,12,0.5));
+  const bf=el('div',{cls:'field'}); bf.appendChild(el('label',{},'اسم النشاط في رسائل التذكير'));
+  const bi=document.createElement('input'); bi.type='text'; bi.value=FU.biz; bi.maxLength=60; bi.dataset.fu='biz';
+  bi.onchange=()=>{ FU.biz=bi.value.trim()||FU_DEFAULTS.biz; fuSave(); showToast('✓ اتحفظ'); };
+  bf.appendChild(bi); grid.appendChild(bf);
+  card.appendChild(grid);
+  const rs=el('button',{cls:'btn-ghost',type:'button',style:'margin-top:6px'},'رجّع القيم الافتراضية');
+  rs.onclick=()=>{ Object.assign(FU,FU_DEFAULTS); FU.brief=null; fuSave(); render(); showToast('✓ رجعت القيم الافتراضية'); };
+  card.appendChild(rs);
+  return card;
+}
+// ══ FOLLOW-UP CENTRE END ══
+
 // ── Modal ─────────────────────────────────────────────────────────────────────
 function openModal(type){
   const defs={
@@ -2750,7 +3363,8 @@ function openModal(type){
     traderAdv: {date:today(),name:'',desc:'',amount:'',settled:false},
     workerLiq: {date:today(),name:'',desc:'',amount:'',returned:false,partnerId:''},
     partnerFund: {date:today(),partnerId:DB.partners[0]?.id??'',kind:'in',amount:'',note:''},
-    supplier:{name:'',phone:'',city:'',linkedCustomerId:''},customer:{name:'',phone:'',city:'',linkSupplierId:''},
+    supplier:{name:'',phone:'',city:'',creditDays:'',linkedCustomerId:''},customer:{name:'',phone:'',city:'',creditDays:'',linkSupplierId:''},
+    reminder:{date:addDays(today(),3),text:'',party:'',done:false},
     partner:{name:'',sharePct:''},
     distribution:{date:today(),note:'',amount:''},
     capital:{amount:DB.capital},
@@ -2782,6 +3396,7 @@ function openEditModal(type,rec){
       fromLocations: (rec.fromLocations||[]).map(l=>({...l})),
     });
   }
+  if(type==='reminder') DB.form.party = rec.partyKind ? `${rec.partyKind==='supplier'?'s':'c'}:${rec.partyId}` : '';
   if(type==='supplier') DB.form.linkedCustomerId = linkedCustomer(rec)?.id ?? '';
   if(type==='customer') DB.form.linkSupplierId  = supplierOfCustomer(rec.id)?.id ?? '';
   _setImpactBase(type);
@@ -2913,7 +3528,9 @@ function validateForm(type,f){
           : 'الشريك ده ماعندوش تمويل مستحق يترد — لو بياخد فلوس، سجّلها كسحب شريك من "سيولة مع العاملين"';
     }
   }
-  else if(type==='supplier'||type==='customer'){ if(!req(f.name)) e.name='اكتب الاسم'; }
+  else if(type==='supplier'||type==='customer'){ if(!req(f.name)) e.name='اكتب الاسم';
+    if(req(f.creditDays)){ const v=parseFloat(f.creditDays); if(!(Number.isFinite(v) && v>=0 && v<=365)) e.creditDays='المهلة من 0 لـ 365 يوم — أو سيبها فاضية علشان الافتراضي'; } }
+  else if(type==='reminder'){ if(!req(f.text)) e.text='اكتب المطلوب'; if(!/^\d{4}-\d{2}-\d{2}$/.test(String(f.date||''))) e.date='اختار تاريخ الميعاد'; }
   else if(type==='partner'){
     if(!req(f.name)) e.name='اكتب اسم الشريك';
     const p=parseFloat(f.sharePct);
@@ -3017,6 +3634,11 @@ function buildRecord(type, f){
     });
     return {list:'distributions', rec:{date:f.date,note:(f.note||'').trim(),amount:amt,breakdown}};
   }
+  if(type==='reminder'){
+    const m=/^([cs]):(.+)$/.exec(String(f.party||''));
+    return {list:'reminders', rec:{date:f.date,text:(f.text||'').trim(),partyKind:m?(m[1]==='s'?'supplier':'customer'):'',
+            partyId:m?(isNaN(+m[2])?m[2]:+m[2]):null,done:!!f.done,doneAt:f.done?(f.doneAt||today()):null}};
+  }
   if(type==='capital') return {field:'capital', value:num(f.amount)};
   return null;
 }
@@ -3080,7 +3702,7 @@ function saveModal(){
     dsSyncOne(f._draftId);
     return;
   }
-  if(['purchase','sale','expense','collection','supplierPay','traderAdv','workerLiq','partnerFund','distribution'].includes(DB.modal)){
+  if(['purchase','sale','expense','collection','supplierPay','traderAdv','workerLiq','partnerFund','distribution','reminder'].includes(DB.modal)){
     commitRecord(DB.modal,f);
     if(f._draftId && !isEdit){
       // approval = the record the reviewer just saved; link both ways so the deal can be traced to its draft
@@ -3096,7 +3718,7 @@ function saveModal(){
     }
   }
   else if(DB.modal==='supplier'){
-    const rec={name:(f.name||'').trim(),phone:(f.phone||'').trim(),city:(f.city||'').trim()};
+    const rec={name:(f.name||'').trim(),phone:(f.phone||'').trim(),city:(f.city||'').trim(),creditDays:Math.round(num(f.creditDays))>0?Math.round(num(f.creditDays)):null};
     let linkC=f.linkedCustomerId;
     if(linkC==='__new__'){                     // create the customer twin with the same details
       const c={id:uid(),name:rec.name,phone:rec.phone,city:rec.city};
@@ -3110,7 +3732,7 @@ function saveModal(){
     else DB.suppliers=[...DB.suppliers,{...rec,id:sid}];
   }
   else if(DB.modal==='customer'){
-    const rec={name:(f.name||'').trim(),phone:(f.phone||'').trim(),city:(f.city||'').trim()};
+    const rec={name:(f.name||'').trim(),phone:(f.phone||'').trim(),city:(f.city||'').trim(),creditDays:Math.round(num(f.creditDays))>0?Math.round(num(f.creditDays)):null};
     const cid=isEdit?f._editId:uid();
     if(isEdit) DB.customers=upd(DB.customers,rec);
     else DB.customers=[...DB.customers,{...rec,id:cid}];
@@ -3756,7 +4378,7 @@ function buildLinkSection(isSup){
 function renderModal(){
   const type=DB.modal;if(!type)return;
   const isEdit=!!DB.form._editId;
-  const titles={purchase:'مشتريات',sale:'مبيعات',expense:'مصروف',collection:'تحصيل من عميل',supplierPay:'دفعة لمورد',traderAdv:'مبلغ تاجر',workerLiq:'سيولة عامل',partnerFund:'تمويل سيولة من شريك (قرض)',supplier:'مورد',customer:'عميل',partner:'شريك',distribution:'توزيع أرباح',capital:'رأس المال',closing:'تقفيل الميزانية'};
+  const titles={purchase:'مشتريات',sale:'مبيعات',expense:'مصروف',collection:'تحصيل من عميل',supplierPay:'دفعة لمورد',traderAdv:'مبلغ تاجر',workerLiq:'سيولة عامل',partnerFund:'تمويل سيولة من شريك (قرض)',supplier:'مورد',customer:'عميل',partner:'شريك',reminder:'ميعاد متابعة',distribution:'توزيع أرباح',capital:'رأس المال',closing:'تقفيل الميزانية'};
   const editTitles={capital:'تعديل رأس المال',closing:'تقفيل الميزانية',locations:'📍 توزيع أماكن التخزين',offset:'⚖ مقاصة حساب موحد',draftPaste:'📥 لصق مسودة للمراجعة',draftReject:'رفض المسودة'};
   document.getElementById('modal-box').classList.toggle('wide',['purchase','sale','locations','draftPaste'].includes(type));
   document.getElementById('modal-title').textContent=editTitles[type]||((isEdit?'تعديل ':'إضافة ')+titles[type]);
@@ -4017,6 +4639,12 @@ function renderModal(){
       body.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:-6px'},
         'ده قرض مش زيادة رأس مال: بيزوّد الخزنة من غير ما يغيّر النسب أو الأرباح، وبيتقفل لما الشريك ياخد فلوسه. لو الشريك أخد أكتر من اللي حطّه، سجّل الزيادة كسحب شريك من "سيولة مع العاملين" علشان تتخصم من نصيبه في التوزيع الجاي.'));
     }
+  } else if(type==='reminder'){
+    body.appendChild(fld('الميعاد',mkInp('date','date')));
+    body.appendChild(fld('المطلوب',mkInp('text','text','مثال: وعد سداد ٥٠ ألف، ميعاد شيك، مكالمة المورد…')));
+    const pOpts=[{id:'',name:'— من غير طرف —'},...DB.customers.map(c=>({id:'c:'+c.id,name:'عميل: '+c.name})),...DB.suppliers.map(x=>({id:'s:'+x.id,name:'مورد: '+x.name}))];
+    body.appendChild(fld('الطرف (اختياري)',mkSel(pOpts,'party')));
+    body.appendChild(el('div',{style:'font-size:11px;color:var(--faint);margin-top:-6px'},'الميعاد بيظهر في «المتابعة والتنبيهات» قبلها بـ ٣ أيام ولحد ما تعلّم عليه «تم».'));
   } else if(type==='partner'){
     body.appendChild(fld('اسم الشريك',mkInp('text','name','اسم الشريك')));
     body.appendChild(fld('نسبة الحصة (%)',mkInp('number','sharePct','0')));
@@ -4044,6 +4672,7 @@ function renderModal(){
     body.appendChild(fld('الاسم',mkInp('text','name',isSup?'اسم المورد':'اسم العميل / المصنع')));
     body.appendChild(fld('التليفون',mkInp('text','phone','01xxxxxxxxx')));
     body.appendChild(fld('المدينة',mkInp('text','city','المدينة')));
+    body.appendChild(fld('مهلة السداد بالأيام (اختياري)',mkInp('number','creditDays',`الافتراضي ${isSup?FU.suppDays:FU.custDays} يوم`)));
     body.appendChild(buildLinkSection(isSup));
   }
   renderImpactPanel();
@@ -4113,9 +4742,11 @@ function buildFieldSnapshot(){
   const money=[...DB.collections.map(r=>({kind:'collection',date:r.date,party:cName(r.customerId),amount:money2(r.amount),note:r.note||''})),
                ...DB.supplierPayments.map(r=>({kind:'supplierPay',date:r.date,party:sName(r.supplierId),amount:money2(r.amount),note:r.note||''}))];
   const expenses=DB.expenses.map(r=>({date:r.date,cat:r.cat,desc:r.desc||'',amount:money2(r.amount)}));
+  // oldest = date of the oldest deal still open, terms = the credit days that apply (the service works out the age on the day it is asked)
+  const ageOf=(kind,p)=>{ const a=partyAging(kind,p); return a.oldestDate?{oldest:a.oldestDate,overdue:money2(a.overdue),terms:a.terms}:{}; };
   const balances={
-    customers:DB.customers.map(c=>({name:c.name,balance:money2(buildCustomerStatement(c).balance)})),   // + = he owes us
-    suppliers:DB.suppliers.map(s=>({name:s.name,balance:money2(buildSupplierStatement(s).balance),linked:linkedCustomer(s)?.name||''})), // + = we owe him
+    customers:DB.customers.map(c=>({name:c.name,balance:money2(buildCustomerStatement(c).balance),...ageOf('customer',c)})),   // + = he owes us
+    suppliers:DB.suppliers.map(s=>({name:s.name,balance:money2(buildSupplierStatement(s).balance),linked:linkedCustomer(s)?.name||'',...ageOf('supplier',s)})), // + = we owe him
   };
   const inventory=computed().invRows.filter(r=>r.stock>0).map(r=>({material:r.m,stock:fq(r.stock),unit:r.unit}));
   const snap={deals,money,expenses,balances,inventory};
@@ -4691,8 +5322,8 @@ function renderBalance(){
     DB.closings.slice().reverse().forEach(c=>{
       const row=el('div',{style:'display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:13px'});
       const left=el('div');
-      left.appendChild(el('div',{style:'color:var(--ink);font-weight:500'},c.date));
-      if(c.note)left.appendChild(el('div',{style:'color:var(--faint);font-size:11px;margin-top:2px'},c.note));
+      left.appendChild(el('div',{style:'color:var(--ink);font-weight:500'},esc(c.date)));
+      if(c.note)left.appendChild(el('div',{style:'color:var(--faint);font-size:11px;margin-top:2px'},esc(c.note)));
       row.appendChild(left);
       const right=el('div',{style:'text-align:left'});
       right.appendChild(el('div',{style:`font-weight:600;color:${c.net>=0?'var(--pos)':'var(--neg)'}`},`ربح: ${fmt(c.net)}`));
@@ -4737,7 +5368,7 @@ function renderDistribution(){
       {key:'draws',label:'سحوبات معلّقة (تُخصم من نصيبه القادم)',render:r=>{const d=partnerDraws(r.id);return d>0?rSpan(fmt(d)):'<span style="color:var(--faint-2)">—</span>';}},
       {key:'loan',label:'تمويل سيولة مستحق له (قرض)',render:r=>{const b=partnerLoanBalance(r.id);return b>0.004?`<span class="c-amber" style="font-weight:600">${fmt(b)}</span>`:'<span style="color:var(--faint-2)">—</span>';}},
     ];
-    pCard.appendChild(makeTable(pCols,DB.partners,id=>deleteWithUndo('partners',id,'الشريك'),r=>openEditModal('partner',r)));
+    pCard.appendChild(makeTable(pCols,DB.partners,id=>deleteParty('partners',id),r=>openEditModal('partner',r)));
     const totalPct=DB.partners.reduce((s,p)=>s+(+p.sharePct||0),0);
     const ok=Math.round(totalPct*100)/100===100;
     pCard.appendChild(el('div',{style:`margin-top:10px;font-size:12px;color:${ok?'var(--pos)':'var(--gold-ink)'}`},
@@ -4759,6 +5390,8 @@ function renderDistribution(){
    {l:'المتاح للتوزيع الآن',v:fmt(avail),c:avail>=0?'c-green':'c-red'}]
   .forEach(s=>{const sc=el('div',{style:'background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px'});sc.appendChild(el('div',{style:'font-size:11px;color:var(--muted);margin-bottom:4px'},s.l));sc.appendChild(el('div',{cls:`stat-value ${s.c}`,style:'font-size:15px'},s.v));aGrid.appendChild(sc);});
   aCard.appendChild(aGrid);
+  if(avail>0.5){ const o=fuNow().outlook;
+    aCard.appendChild(el('div',{cls:'ai-note',id:'fu-safe-dist'},`<strong>أقصى توزيع آمن على الخزنة دلوقتي: ${fuMoney(o.safeDist)}</strong> — الخزنة ${fuMoney(o.cash)} − مستحقات موردين متأخرة ${fuMoney(o.payOverdue)} − احتياطي مصروفات ${fuMoney(o.buffer)}. التفاصيل في «المتابعة والتنبيهات».`)); }
   div.appendChild(aCard);
 
   // ─ سجل التوزيعات
@@ -5172,9 +5805,9 @@ function printPartyStatement(party,type,entries,balance){
       const label=groupLabels[type]||type;
       const badgeCls=(type==='بيع'||type==='شراء')?'badge-w':'badge-s';
       rowsHtml+=`<tr class="grp-hdr"><td colspan="4"><span class="badge ${badgeCls}">${label}</span> <span class="grp-count">(${g.items.length} ${g.items.length===1?'معاملة':'معاملات'})</span></td></tr>`;
-      g.items.slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach(e=>{
+      g.items.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).forEach(e=>{
         rowsHtml+=`<tr>
-          <td>${e.date}</td>
+          <td>${esc(e.date)}</td>
           <td>${esc(e.desc)}</td>
           <td class="red">${e.debit>0?fmt(e.debit):'—'}</td>
           <td class="green">${e.credit>0?fmt(e.credit):'—'}</td>
@@ -5299,7 +5932,7 @@ function showStatementOverlay(party,type,entries,balance){
       ?`<span class="badge badge-warning">${e.type}</span>`
       :`<span class="badge badge-success">${e.type}</span>`;
     tr.innerHTML=`
-      <td style="padding:9px 10px;color:var(--muted)">${e.date}</td>
+      <td style="padding:9px 10px;color:var(--muted)">${esc(e.date)}</td>
       <td style="padding:9px 10px">${badge}</td>
       <td style="padding:9px 10px;color:var(--ink-2)">${esc(e.desc)}</td>
       <td style="padding:9px 10px;color:var(--neg);font-weight:500">${e.debit>0?fmt(e.debit):'—'}</td>
@@ -5316,16 +5949,17 @@ function showStatementOverlay(party,type,entries,balance){
   ov.appendChild(box);document.body.appendChild(ov);
 }
 function render(){
+  _fuCache=null;                                   // the follow-up list is rebuilt once per render and shared by the menu badge, the dashboard and its own screen
   const nav=document.getElementById('nav');nav.innerHTML='';
   NAV.forEach(n=>{
     const active=DB.view===n.id;
     const b=document.createElement('button');b.className=`nav-btn ${active?'active':''}`;
     if(active) b.setAttribute('aria-current','page');
-    const pend = n.id==='drafts' ? (DB.drafts||[]).filter(d=>d.status==='pending').length : 0;
+    const pend = n.id==='drafts' ? (DB.drafts||[]).filter(d=>d.status==='pending').length : n.id==='followup' ? fuNow().urgent : 0;
     b.textContent=n.l+(pend?` (${pend})`:'');b.onclick=()=>{DB.view=n.id;render();};nav.appendChild(b);
   });
   document.getElementById('view-title').textContent=TITLES[DB.view];
-  const views={dashboard:renderDashboard,purchases:renderPurchases,sales:renderSales,inventory:renderInventory,contacts:renderContacts,expenses:renderExpenses,accounts:renderAccounts,drafts:renderDrafts,pl:renderPL,balance:renderBalance,distribution:renderDistribution,ai:renderAI};
+  const views={followup:renderFollowup,dashboard:renderDashboard,purchases:renderPurchases,sales:renderSales,inventory:renderInventory,contacts:renderContacts,expenses:renderExpenses,accounts:renderAccounts,drafts:renderDrafts,pl:renderPL,balance:renderBalance,distribution:renderDistribution,ai:renderAI};
   const content=document.getElementById('content');content.innerHTML='';
   if(views[DB.view])content.appendChild(views[DB.view]());
 }
@@ -5352,6 +5986,7 @@ window.addEventListener('unhandledrejection', e=>{ try{ console.error('Unhandled
 _applyThemeIcon();                   // sync the light/dark toggle icon with the active theme
 aiLoad();                            // AI provider/key config (localStorage only — never in DB)
 dsLoad();                            // drafts-service link (localStorage only — never in DB)
+fuLoad();                            // follow-up thresholds / snoozes (localStorage only — never in DB)
 dsStartAutoPull();                   // poll for new field drafts while the app is open
 render();
 const _hadLocal = restoreLocal();   // restore unsaved work from a previous session first

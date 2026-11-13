@@ -9,7 +9,8 @@ Open [`plastic_manager.html`](plastic_manager.html) in a browser and it runs.
 
 | View | Purpose |
 |---|---|
-| **Dashboard** (`renderDashboard`) | Headline figures for the business at a glance |
+| **Dashboard** (`renderDashboard`) | Headline figures for the business at a glance, plus the top three follow-up items |
+| **Follow-up** (`renderFollowup`) | What to do today: overdue customers and suppliers (aged FIFO, per-party credit days), cash against dues and the safe distribution, selling under cost, purchase-price moves, idle stock, old advances, the owner's own follow-up dates, a WhatsApp collection message. Every figure is computed by code; an optional AI pass only re-orders and words the items, and any sentence quoting a number the code did not produce is dropped |
 | **Purchases** (`renderPurchases`) | Supplier purchases, with search, column sort, period filter (last 2 weeks / month / 3 months / this month / custom range), page size (25/50/100/all), pagination |
 | **Sales** (`renderSales`) | Customer sales, same table controls |
 | **Expenses** (`renderExpenses`) | Operating costs |
@@ -78,6 +79,12 @@ The `.claude/launch.json` config starts exactly this.
   adds cash when lent and removes it when repaid.
 - **Safety layer.** `validateForm` / `esc` / `num` guard every input path; a global error
   net catches anything that escapes.
+
+## Tests
+
+`python tests/e2e_app.py` and `python tests/e2e_insights.py` drive the app in headless Chrome (Playwright, the installed Chrome) on a
+synthetic ledger (`tests/synthetic_ledger.py`, invented names); `python tests/screenshots.py <dir>` also links the app to the drafts
+service in mock mode. `node drafts-service/test/service-check.js` covers the service. None of them reads the real `plastic_data_*.json`.
 
 ## Audit
 

@@ -52,6 +52,8 @@ const DATA_FILE         = process.env.DATA_FILE || path.join(__dirname, 'data', 
 const MAX_STORED_AUDIO  = 2 * 1024 * 1024;   // bytes of the compressed recording we archive
 const MAX_PARSE_AUDIO   = 8 * 1024 * 1024;   // bytes of the WAV sent to Gemini (never stored)
 const MAX_AUDIO_SECONDS = 120;
+const MAX_TEXT          = 4000;              // characters of one typed / dictated message
+const MAX_FIELDS_JSON   = 20 * 1024;         // bytes of a draft's fields: a draft is a handful of values
 
 const DRAFT_TYPES = ['purchase', 'sale', 'expense', 'collection', 'supplierPay'];
 const EXPENSE_CATS_DEFAULT = ['إيجار', 'نقل', 'عمالة', 'كهرباء ومياه', 'صيانة', 'متفرقات'];
@@ -233,7 +235,7 @@ const PARSE_SCHEMA = {
 };
 
 function systemPrompt(ref, fieldName) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = cairoToday();                          // the office's calendar, not the server's (Render runs on UTC)
   const list = (a) => (a && a.length) ? a.join('، ') : '(القائمة فاضية)';
   return `أنت مساعد محاسب لتجارة خامات بلاستيك في مصر. المتحدث اسمه ${fieldName} وبيتكلم عامية مصرية ويوصف حركة واحدة: شراء، بيع، مصروف، تحصيل من عميل، أو دفعة لمورد.
 مهمتك: تطلع من كلامه مسودة حركة بصيغة JSON بالضبط حسب المخطط المطلوب. لا تخترع أي رقم أو اسم. لو حاجة مش واضحة اسأل عنها.
@@ -271,6 +273,7 @@ const QUERY_SCHEMA = {
     sort: { type: 'STRING', enum: ['newest', 'oldest', 'largest'] },
     limit: { type: 'NUMBER' },
     balanceSide: { type: 'STRING', enum: ['customers', 'suppliers', 'both'] },
+    overdueOnly: { type: 'BOOLEAN', description: 'مين متأخر في السداد: الأرصدة اللي عدّت مهلة السداد بس' },
   },
 };
 const CONVERSE_SCHEMA = {
@@ -299,7 +302,7 @@ const CONVERSE_SCHEMA = {
 };
 
 function conversePrompt({ ref, fieldName, allowed, pending, lastQuery, asOf }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = cairoToday();                          // the office's calendar, not the server's (Render runs on UTC)
   const list = a => (a && a.length) ? a.join('، ') : '(القائمة فاضية)';
   return `أنت مساعد في مكتب تجارة خامات بلاستيك في مصر. المتحدث ${fieldName} بيفتح الصفحة ويتكلم عامية مصرية، وأنت اللي بتفهم هو عايز إيه من غير ما يقولك:
 - record: بيوصف حركة عملها (اشترى، باع، صرف، قبض من عميل، دفع لمورد) → طلّع draft.
@@ -323,7 +326,7 @@ function conversePrompt({ ref, fieldName, allowed, pending, lastQuery, asOf }) {
 - فئات المصروفات: ${list((ref && ref.expenseCats) || EXPENSE_CATS_DEFAULT)}
 
 للماليات (لو مسموح): entity=finance مع topic: cash (الخزنة/السيولة)، profit (الأرباح وصافي الربح والمتاح للتوزيع)، balance_sheet (الميزانية: خزنة وذمم ومخزون وحقوق ملكية)، distribution (توزيع الأرباح: لو ذكر مبلغ حطه في amount، وإلا هيتحسب على المتاح للتوزيع)، partners (الشركاء ونسبهم وسحوباتهم وتمويلهم)، pl (الأرباح والخسائر بالشهور، مع from/to)، closings (التقفيلات). 
-للـ query: entity = deals للمشتريات والمبيعات، money للتحصيلات ودفعات الموردين، expenses للمصروفات، balances للأرصدة (balanceSide: customers = اللي علينا عندهم، suppliers = اللي لهم علينا)، inventory للمخزون، all لـ"إيه اللي حصل". kinds لو حدد نوع. party/material بالأسماء من القوائم. aggregate: list لقائمة، sum لإجمالي، count لعدد، group_party/group_day/group_material للتجميع. sort: newest افتراضي، largest لـ"أكبر". "حساب فلان" = entity balances و party فلان.
+للـ query: entity = deals للمشتريات والمبيعات، money للتحصيلات ودفعات الموردين، expenses للمصروفات، balances للأرصدة (balanceSide: customers = اللي علينا عندهم، suppliers = اللي لهم علينا)، inventory للمخزون، all لـ"إيه اللي حصل". kinds لو حدد نوع. party/material بالأسماء من القوائم. aggregate: list لقائمة، sum لإجمالي، count لعدد، group_party/group_day/group_material للتجميع. sort: newest افتراضي، largest لـ"أكبر". "حساب فلان" = entity balances و party فلان. "مين متأخر في السداد؟" أو "مين عليه فلوس قديمة؟" = entity balances و overdueOnly=true (و balanceSide=customers لو قصده العملاء، suppliers لو قصده إحنا متأخرين لمين).
 ${lastQuery ? `آخر سؤال في المحادثة كان: ${JSON.stringify(lastQuery)} — لو الجملة الحالية متابعة ("وجمال؟" "والشهر اللي قبله؟") عدّل عليه بس.` : ''}
 ${pending ? `في مسودة حركة معلّقة قدامه دلوقتي: ${JSON.stringify(pending)}. لو بيصلّح فيها ("لأ خليها آجل") رجّع intent=record بكل المسودات كاملة محدّثة. لو بيوافق intent=confirm. لو بيرفض intent=cancel.` : 'مفيش مسودة معلّقة: confirm و cancel مالهمش معنى، استخدم clarify أو chat.'}
 
@@ -332,7 +335,7 @@ ${pending ? `في مسودة حركة معلّقة قدامه دلوقتي: ${JS
 - كل مصروف draft من نوع expense (نقل ٥٠٠ وعمالة ٣٠٠ = اتنين). مصاريف الصفقة نفسها (نقل الشحنة) بتتحط في txExpenses بتاعة الشراء أو البيع، مش لوحدها.
 - «دفعت لهاني ٣٠ ألف» = supplierPay، «قبضت من فلكس ١٠ آلاف» = collection؛ ودي مش بتتحط في paid بتاع شراء إلا لو قال إنها دفعة نفس الصفقة.
 - لا تدمج حركتين في draft ولا تخترع اسم ولا رقم؛ لو في حركة ناقصة حاجة أساسية حط missing/question عليها بس وكمّل الباقي.
-- التقويم (آخر ١٤ يوم): ${Array.from({ length: 14 }, (_, i) => { const d = new Date(Date.now() - i * 864e5); return `${Q.dayLabel(d.toISOString().slice(0, 10)).split(' ')[0]} = ${d.toISOString().slice(0, 10)}`; }).join('، ')}. أي يوم بالاسم («الخميس اللي فات») خده من التقويم ده.
+- التقويم (آخر ١٤ يوم): ${Array.from({ length: 14 }, (_, i) => { const d = cairoDaysAgo(i); return `${Q.dayLabel(d).split(' ')[0]} = ${d}`; }).join('، ')}. أي يوم بالاسم («الخميس اللي فات») خده من التقويم ده.
 لـ record: قواعد الأرقام: حوّل الأرقام المنطوقة لأرقام (ألفين وسبعين = 2070، تلاتين ألف = 30000). الوحدة الافتراضية كيلوجرام والسعر للكيلو. paid هو الكاش المدفوع في نفس الحركة؛ "آجل" أو "على الحساب" = 0؛ لو ما ذكرش الدفع اسأل. txExpenses مصاريف الصفقة. الحقول الأساسية: purchase/sale: party, material, qty, price, paid. expense: cat, amount. collection/supplierPay: party, amount. لو في حقل أساسي ناقص حطه في draft.missing واكتب draft.question سؤال واحد بالعامية. لو مفيش ناقص: draft.question نص فاضي و draft.reply جملة بتلخص الحركة علشان يأكد. لا تخترع أرقام أو أسماء.
 transcript = النص المنطوق كما قيل بدون تعديل.`;
 }
@@ -416,7 +419,7 @@ function planQueries(q, more) {
 }
 async function phraseAnswer(question, query, result, asOf) {
   const fallback = Q.fallbackAnswer(result, asOf);
-  if (result.denied || !AI_ON) return fallback;
+  if (result.denied || !AI_ON || result.overdueOnly) return fallback;      // a list of who is late is read out exactly as computed: names, amounts and ages, no re-wording
   try {
     const compact = { count: result.count, totalAmount: result.totalAmount, totalQty: result.totalQty, topic: result.topic, data: result.data, rows: (result.rows || []).slice(0, 15), groups: (result.groups || []).slice(0, 10) };
     const sys = 'أنت بترد على موظف ميداني في تجارة بلاستيك بالعامية المصرية في جملتين تلاتة بالكتير. استخدم الأرقام اللي في النتيجة بالحرف ولا تحسب ولا تخمّن أي رقم جديد. التواريخ قولها باسم اليوم زي الحقل day (مثلاً «السبت 24/10») مش بالأرقام بس. لو النتيجة فاضية قول كده. الأرقام بالجنيه. في الآخر اذكر آخر تحديث للبيانات. للأرصدة: customers والرقم موجب = العميل عليه فلوس لنا، suppliers والرقم موجب = إحنا علينا فلوس للمورد، السالب العكس. رد نص عادي من غير markdown.';
@@ -463,8 +466,13 @@ async function geminiParse({ text, audio, mime, conversation, reference, fieldNa
 // ── App ───────────────────────────────────────────────────────────────────────
 const app = express();
 app.disable('x-powered-by');
+// Behind Render's proxy every request arrives from the proxy's address, so the per-address limits below would lump all phones
+// together. TRUST_PROXY=1 (set in render.yaml) makes req.ip the real client. Leave it unset when the service is reached directly.
+if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? +process.env.TRUST_PROXY : process.env.TRUST_PROXY);
 app.use(express.json({ limit: '12mb' }));
 app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
   // Token-based auth, no cookies → a permissive CORS policy is safe and lets the owner's local app call us.
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Field-Code');
@@ -484,15 +492,23 @@ function limit(max) {
     next();
   };
 }
+// Wrong codes / tokens are counted per address on EVERY endpoint. Before this only /login was limited, so a short field code
+// could be guessed without limit through any other endpoint that takes X-Field-Code (GET /api/field/reference, for one).
+const MAX_AUTH_FAILS = +process.env.MAX_AUTH_FAILS || 20, FAIL_WINDOW_MS = 15 * 60 * 1000;
+const fails = new Map();
+const failKey = req => `${req.ip}|${Math.floor(Date.now() / FAIL_WINDOW_MS)}`;
+const lockedOut = req => (fails.get(failKey(req)) || 0) >= MAX_AUTH_FAILS;
+const noteFail = req => { if (fails.size > 5000) fails.clear(); const k = failKey(req); fails.set(k, (fails.get(k) || 0) + 1); };
+const refuse = (req, res, msg) => { if (lockedOut(req)) return res.status(429).json({ error: 'محاولات غلط كتير — استنى ربع ساعة' }); noteFail(req); return res.status(401).json({ error: msg }); };
 function fieldAuth(req, res, next) {
   const code = req.get('x-field-code') || '';
-  const name = Object.keys(FIELD_CODES).find(n => safeEq(FIELD_CODES[n], code));
-  if (!name) return res.status(401).json({ error: 'كود الدخول غلط' });
+  const name = lockedOut(req) ? null : Object.keys(FIELD_CODES).find(n => safeEq(FIELD_CODES[n], code));
+  if (!name) return refuse(req, res, 'كود الدخول غلط');
   req.fieldName = name; next();
 }
 function ownerAuth(req, res, next) {
   const t = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
-  if (!OWNER_TOKEN || !safeEq(t, OWNER_TOKEN)) return res.status(401).json({ error: 'رمز المالك غلط' });
+  if (lockedOut(req) || !OWNER_TOKEN || !safeEq(t, OWNER_TOKEN)) return refuse(req, res, 'رمز المالك غلط');
   next();
 }
 const wrap = fn => (req, res) => fn(req, res).catch(e => { if (!e.needText) console.error(e); res.status(e.status || (e.needText ? 409 : 500)).json({ error: e.message || 'خطأ', ...(e.needText ? { needText: true } : {}) }); });
@@ -513,8 +529,8 @@ app.get('/api/health', wrap(async (req, res) => res.json({ ok: true, store: DATA
 const asOfText = rec => rec && rec.updatedAt ? new Date(rec.updatedAt).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', dateStyle: 'medium', timeStyle: 'short' }) : '';
 app.post('/api/field/login', limit(20), wrap(async (req, res) => {
   const code = (req.body && req.body.code) || '';
-  const name = Object.keys(FIELD_CODES).find(n => safeEq(FIELD_CODES[n], code));
-  if (!name) return res.status(401).json({ error: 'كود الدخول غلط' });
+  const name = lockedOut(req) ? null : Object.keys(FIELD_CODES).find(n => safeEq(FIELD_CODES[n], code));
+  if (!name) return refuse(req, res, 'كود الدخول غلط');
   const snap = await store.getSnapshot();
   res.json({ name, ai: AI_ON, audioInput: AUDIO_INPUT, scopes: [...scopesOf(name)], snapshotAt: snap ? snap.updatedAt : null, asOf: asOfText(snap), sso_token: ML.ssoToken(name) });
 }));
@@ -535,7 +551,8 @@ app.post('/api/field/parse', fieldAuth, limit(30), wrap(async (req, res) => {
 // what is not essential (the date, whether it was paid): only a missing party / material / quantity / price / amount is worth stopping the person for.
 const UNIT_AR = { kg: 'كيلوجرام', kgs: 'كيلوجرام', kilo: 'كيلوجرام', kilogram: 'كيلوجرام', kilograms: 'كيلوجرام', 'كيلو': 'كيلوجرام', 'كجم': 'كيلوجرام', 'كيلوجرام': 'كيلوجرام', 'كيلوغرام': 'كيلوجرام',
   ton: 'طن', tons: 'طن', tonne: 'طن', 'طن': 'طن', 'أطنان': 'طن' };
-const cairoToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+const cairoDaysAgo = n => new Date(Date.now() - n * 864e5).toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+const cairoToday = () => cairoDaysAgo(0);
 function essentialGaps(type, f) {
   const pos = v => Number.isFinite(+v) && +v > 0, gaps = [];
   if (type === 'purchase' || type === 'sale') {
@@ -559,7 +576,8 @@ function cleanDraft(d) {
 
 async function converseFor(fieldName, body) {
   if (!AI_ON) { const e = new Error('الذكاء الاصطناعي مش متفعّل على الخدمة'); e.status = 503; throw e; }
-  const { text, audio, mime, conversation, pending, lastQuery } = body || {};
+  const { audio, mime, conversation, pending, lastQuery } = body || {};
+  const text = body && body.text != null ? String(body.text).slice(0, MAX_TEXT) : body && body.text;      // a message is a few sentences, not a document
   const audioB64 = audio ? b64ToBuf(audio, MAX_PARSE_AUDIO).toString('base64') : null;
   const [reference, snapRec] = await Promise.all([store.getReference(), store.getSnapshot()]);
   const allowed = scopesOf(fieldName), asOf = asOfText(snapRec);
@@ -600,7 +618,8 @@ app.post('/api/field/query', fieldAuth, limit(60), wrap(async (req, res) => {
 app.post('/api/field/drafts', fieldAuth, wrap(async (req, res) => {
   const b = req.body || {};
   if (!DRAFT_TYPES.includes(b.type)) return res.status(400).json({ error: 'نوع الحركة مش معروف' });
-  if (!b.fields || typeof b.fields !== 'object') return res.status(400).json({ error: 'الحقول ناقصة' });
+  if (!b.fields || typeof b.fields !== 'object' || Array.isArray(b.fields)) return res.status(400).json({ error: 'الحقول ناقصة' });
+  if (JSON.stringify(b.fields).length > MAX_FIELDS_JSON) return res.status(413).json({ error: 'المسودة أكبر من المسموح' });
   if (b.audioSeconds && b.audioSeconds > MAX_AUDIO_SECONDS + 5) return res.status(400).json({ error: 'التسجيل أطول من المسموح' });
   const audio = b64ToBuf(b.audio, MAX_STORED_AUDIO);
   const out = await store.insertDraft({
@@ -619,7 +638,7 @@ app.get('/api/field/drafts', fieldAuth, wrap(async (req, res) => {
 // ── the avatar's server (Matrix) acting for one field person ──
 // Same limits as /api/field/*: the person's scopes, their name on every draft. The key proves the call comes from the avatar's server.
 function serviceAuth(req, res, next) {
-  if (!ML.serviceKeyOk(req.get('x-service-key'))) return res.status(401).json({ error: 'not allowed' });
+  if (lockedOut(req) || !ML.serviceKeyOk(req.get('x-service-key'))) return refuse(req, res, 'not allowed');
   const name = String((req.body && req.body.person) || '');
   if (!Object.prototype.hasOwnProperty.call(FIELD_CODES, name)) return res.status(403).json({ error: 'الشخص ده مش متسجّل أو متقفل' });
   req.fieldName = name; next();
@@ -650,7 +669,7 @@ app.post('/api/service/brief', serviceAuth, wrap(async (req, res) => {
   res.json({ speech: AS.plain(lines.join(' ')), pending, scopes: [...scopesOf(name)], asOf });
 }));
 app.post('/api/service/drafts', serviceAuth, wrap(async (req, res) => {
-  const b = req.body || {}, recs = (Array.isArray(b.records) ? b.records : []).filter(r => r && DRAFT_TYPES.includes(r.type) && r.fields && typeof r.fields === 'object').slice(0, 8);
+  const b = req.body || {}, recs = (Array.isArray(b.records) ? b.records : []).filter(r => r && DRAFT_TYPES.includes(r.type) && r.fields && typeof r.fields === 'object' && !Array.isArray(r.fields) && JSON.stringify(r.fields).length <= MAX_FIELDS_JSON).slice(0, 8);
   if (!recs.length) return res.status(400).json({ error: 'مفيش حركة تتبعت' });
   const conv = Array.isArray(b.conversation) ? b.conversation.slice(-20).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text || '').slice(0, 2000) })) : [];
   const ids = [];
@@ -664,7 +683,7 @@ app.get('/api/owner/drafts', ownerAuth, wrap(async (req, res) => {
   res.json(rows);
 }));
 app.get('/api/owner/drafts/:id/audio', ownerAuth, wrap(async (req, res) => {
-  const a = await store.getAudio(+req.params.id);
+  const a = Number.isInteger(+req.params.id) ? await store.getAudio(+req.params.id) : null;
   if (!a) return res.status(404).json({ error: 'مفيش تسجيل' });
   res.setHeader('Content-Type', a.mime || 'audio/webm'); res.setHeader('Cache-Control', 'private, max-age=3600');
   res.send(a.audio);
@@ -672,6 +691,7 @@ app.get('/api/owner/drafts/:id/audio', ownerAuth, wrap(async (req, res) => {
 app.patch('/api/owner/drafts/:id', ownerAuth, wrap(async (req, res) => {
   const b = req.body || {};
   if (b.status && !['pending', 'approved', 'rejected'].includes(b.status)) return res.status(400).json({ error: 'حالة غير معروفة' });
+  if (!Number.isInteger(+req.params.id)) return res.status(404).json({ error: 'المسودة مش موجودة' });      // (a non-number used to reach the database and come back as a 500)
   const d = await store.updateDraft(+req.params.id, { status: b.status, review: b.review, final: b.final, ledgerId: b.ledgerId, ledgerList: b.ledgerList });
   if (!d) return res.status(404).json({ error: 'المسودة مش موجودة' });
   res.json(d);
@@ -770,5 +790,5 @@ app.use(express.static(PUB, { index: false, extensions: ['html'] }));
   if (!Object.keys(FIELD_CODES).length) console.warn('⚠ FIELD_CODES is empty — nobody can log in to the capture page');
   if (!AI_ON) console.warn(`⚠ no API key for provider "${PROVIDER}" — set it from the app (🧠 settings) or as an environment variable; the capture page falls back to manual entry`);
   else console.log(`AI provider: ${PROVIDER} (${modelName()}), audio input: ${AUDIO_INPUT}`);
-  app.listen(PORT, () => console.log(`drafts service on :${PORT} (${DATABASE_URL ? 'postgres' : 'file store ' + DATA_FILE})`));
+  app.listen(PORT, process.env.HOST || undefined, () => console.log(`drafts service on :${PORT} (${DATABASE_URL ? 'postgres' : 'file store ' + DATA_FILE})`));
 })().catch(e => { console.error('startup failed', e); process.exit(1); });

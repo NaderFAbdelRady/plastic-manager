@@ -2,18 +2,19 @@
 // Smoke test of the avatar link: SSO token, the service API (converse / brief / drafts) and the pages, against the scripted Gemini stand-in.
 //   node test/avatar-smoke.js
 const os = require('os'), path = require('path'), crypto = require('crypto'), assert = require('assert');
-process.env.PORT = '8795';
+process.env.PORT = process.env.SMOKE_PORT || '8795';                       // SMOKE_PORT / MOCK_AI_PORT: run beside another copy
+const MOCK = 'http://127.0.0.1:' + (process.env.MOCK_AI_PORT || '8793');
 process.env.OWNER_TOKEN = 'smoke-owner-token';
 process.env.FIELD_CODES = 'عز:1234,أحمد:5678';
 process.env.FIELD_SCOPES = 'أحمد:deals+money';
 process.env.DATA_FILE = path.join(os.tmpdir(), `pm-avatar-smoke-${process.pid}.json`);
-process.env.GEMINI_API_KEY = 'mock'; process.env.GEMINI_BASE = 'http://localhost:8793';
+process.env.GEMINI_API_KEY = 'mock'; process.env.GEMINI_BASE = MOCK;
 process.env.FIELD_MATRIX_URL = 'https://matrix.example'; process.env.FIELD_MATRIX_PK = 'pk_test'; process.env.FIELD_MATRIX_SECRET = 'sk_secret_for_test';
 process.env.FIELD_SERVICE_KEY = 'k'.repeat(24);
 require('./mock-gemini.js');
 require('../server.js');
 
-const B = 'http://127.0.0.1:8795', KEY = { 'X-Service-Key': 'k'.repeat(24) }, OWNER = { Authorization: 'Bearer smoke-owner-token' };
+const B = 'http://127.0.0.1:' + process.env.PORT, KEY = { 'X-Service-Key': 'k'.repeat(24) }, OWNER = { Authorization: 'Bearer smoke-owner-token' };
 const call = async (p, body, headers, method) => {
   const r = await fetch(B + p, { method: method || (body === undefined ? 'GET' : 'POST'), headers: { 'Content-Type': 'application/json', ...(headers || {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
   const t = await r.text(); let j; try { j = JSON.parse(t); } catch (e) { j = t; }
